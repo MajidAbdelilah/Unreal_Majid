@@ -12,7 +12,7 @@ use winit::{
 use wasm_bindgen::prelude::*;
 
 pub struct Ren {
-    window: Arc<Window>,
+    pub window: Arc<Window>,
 }
 
 impl Ren {

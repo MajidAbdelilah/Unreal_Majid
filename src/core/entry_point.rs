@@ -9,7 +9,7 @@ pub fn run() -> anyhow::Result<()> {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        console_log::init_with_level(log::Level::Info).unwrap_throw();
+        console_log::init_with_level(log::Level::Info).unwrap();
     }
 
     let event_loop = EventLoop::with_user_event().build().unwrap();
@@ -20,5 +20,12 @@ pub fn run() -> anyhow::Result<()> {
 
     event_loop.run_app(&mut win).unwrap();
 
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn run_web() -> Result<(), wasm_bindgen::JsValue> {
+    console_error_panic_hook::set_once();
+    run().unwrap();
     Ok(())
 }

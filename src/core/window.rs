@@ -36,13 +36,13 @@ impl ApplicationHandler<Ren> for Win {
         #[cfg(target_arch = "wasm32")]
         {
             use wasm_bindgen::JsCast;
-            use winit::platform::web::windowAttributesExtWebSys;
+            use winit::platform::web::WindowAttributesExtWebSys;
 
             const CANVAS_ID: &str = "canvas";
 
-            let window = wgpu::web_sys::window().unwrap_throw();
-            let document = window.document().unwrap_throw();
-            canvas = document.get_element_by_id(CANVAS_ID).unwrap_throw();
+            let window = wgpu::web_sys::window().unwrap();
+            let document = window.document().unwrap();
+            let canvas = document.get_element_by_id(CANVAS_ID).unwrap();
             let html_canvas_element = canvas.unchecked_into();
             window_attributes = window_attributes.with_canvas(Some(html_canvas_element));
         }
@@ -58,7 +58,7 @@ impl ApplicationHandler<Ren> for Win {
         #[cfg(target_arch = "wasm32")]
         {
             if let Some(proxy) = self.proxy.take() {
-                wasm_bindgen_features::spawn_local(async move {
+                wasm_bindgen_futures::spawn_local(async move {
                     assert!(
                         proxy
                             .send_event(Ren::new(window).await.expect("unable to create canvas"))
@@ -69,7 +69,7 @@ impl ApplicationHandler<Ren> for Win {
         }
     }
 
-    fn user_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, event: Ren) {
+    fn user_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, mut event: Ren) {
         #[cfg(target_arch = "wasm32")]
         {
             event.window.request_redraw();
