@@ -1,6 +1,8 @@
 use winit::event_loop::EventLoop;
 
 use crate::core::window::Win;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
 
 pub fn run() -> anyhow::Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
@@ -24,8 +26,11 @@ pub fn run() -> anyhow::Result<()> {
 }
 
 #[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
 pub fn run_web() -> Result<(), wasm_bindgen::JsValue> {
     console_error_panic_hook::set_once();
+    // println!("error: start");
+
     run().unwrap();
     Ok(())
 }
