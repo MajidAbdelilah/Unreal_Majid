@@ -96,7 +96,17 @@ impl ApplicationHandler<Ren> for Win {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => ren.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
-                ren.render();
+                ren.update();
+                match ren.render() {
+                    Ok(_) => {}
+                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                        let size = ren.window.inner_size();
+                        ren.resize(size.width, size.height);
+                    }
+                    Err(e) => {
+                        log::error!("Unable to render {}", e);
+                    }
+                }
             }
             WindowEvent::KeyboardInput {
                 event:
@@ -106,10 +116,7 @@ impl ApplicationHandler<Ren> for Win {
                         ..
                     },
                 ..
-            } => match (code, key_state.is_pressed()) {
-                (KeyCode::Escape, true) => event_loop.exit(),
-                _ => {}
-            },
+            } => ren.handle_key(event_loop, code, key_state.is_pressed()),
             _ => {}
         }
     }
