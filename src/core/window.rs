@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 #[cfg(target_arch = "wasm32")]
 use winit::event_loop::{self, EventLoop};
@@ -14,6 +15,8 @@ pub struct Win {
     #[cfg(target_arch = "wasm32")]
     proxy: Option<winit::event_loop::EventLoopProxy<Ren>>,
     ren: Option<Ren>,
+    last_fps_update: Option<Instant>,
+    frame_count: u32,
 }
 
 impl Win {
@@ -24,6 +27,8 @@ impl Win {
             ren: None,
             #[cfg(target_arch = "wasm32")]
             proxy,
+            last_fps_update: None,
+            frame_count: 0,
         }
     }
 }
@@ -96,6 +101,24 @@ impl ApplicationHandler<Ren> for Win {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => ren.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
+                self.frame_count += 1;
+                if self.last_fps_update.is_none() {
+                    self.last_fps_update = Some(Instant::now());
+                }
+
+                if let Some(last) = self.last_fps_update {
+                    let now = Instant::now();
+                    let elapsed = now.duration_since(last);
+                    if elapsed.as_secs_f32() >= 1.0 {
+                        let fps = self.frame_count as f32 / elapsed.as_secs_f32();
+                        let title = format!("Unreal Majid - FPS: {:.2}", fps);
+                        ren.window.set_title(&title);
+
+                        self.frame_count = 0;
+                        self.last_fps_update = Some(now);
+                    }
+                }
+
                 ren.update();
                 match ren.render() {
                     Ok(_) => {}

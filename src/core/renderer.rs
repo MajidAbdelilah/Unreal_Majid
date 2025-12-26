@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{process::exit, sync::Arc};
 use wgpu::util::DeviceExt;
 
 use winit::{
@@ -18,7 +18,15 @@ struct Dimensions {
     width: u32,
     height: u32,
     stride: u32,
-    _pad: u32,
+    num_of_particles: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Particle {
+    pos: [f32; 4],
+    speed: [f32; 4],
+    accel: [f32; 4],
 }
 
 pub struct Ren {
@@ -28,10 +36,11 @@ pub struct Ren {
     config: wgpu::SurfaceConfiguration,
     is_surface_configured: bool,
     pub window: Arc<Window>,
-    // shader: wgpu::ShaderModel,
     compute_pipeline: wgpu::ComputePipeline,
     bind_group: Option<wgpu::BindGroup>,
     output_buffer: Option<wgpu::Buffer>,
+    particles: wgpu::Buffer,
+    num_of_particles: u32,
     dimensions_buffer: wgpu::Buffer,
 }
 
@@ -138,7 +147,7 @@ impl Ren {
             label: Some("Compute Pipeline"),
             layout: None,
             module: &shader,
-            entry_point: None,
+            entry_point: Some("init"),
             compilation_options: Default::default(),
             cache: Default::default(),
         });
@@ -148,6 +157,95 @@ impl Ren {
             size: std::mem::size_of::<Dimensions>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
+        });
+
+        let args: Vec<String> = std::env::args().collect();
+        if args.len() != 2 {
+            println!(
+                "Error: please give me the number of particles as an argument of the program, as follow"
+            );
+            println!("./name_of_program 1000000");
+            exit(0);
+        }
+        let num_of_particles_res = args[1].parse::<u32>();
+        let mut _num_of_particles = 1;
+        match num_of_particles_res {
+            Ok(num) => {
+                _num_of_particles = num;
+            }
+            Err(e) => {
+                println!("Error: please enter a correct number");
+                exit(0);
+            }
+        }
+
+        let particle_size = std::mem::size_of::<Particle>() as u64;
+        let particles_buffer_size = _num_of_particles as u64 * particle_size;
+
+        let particles = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("particles buffer"),
+            size: particles_buffer_size,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
+        queue.write_buffer(
+            &dimensions_buffer,
+            0,
+            bytemuck::cast_slice(&[Dimensions {
+                width: size.width,
+                height: size.height,
+                stride: 0,
+                num_of_particles: _num_of_particles,
+            }]),
+        );
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Render Encoder init"),
+        });
+
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        let bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Compute Bind Group init"),
+            layout: &bind_group_layout,
+            entries: &[
+                // wgpu::BindGroupEntry {
+                //     binding: 0,
+                //     resource: particles.as_entire_binding(),
+                // },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: particles.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: dimensions_buffer.as_entire_binding(),
+                },
+            ],
+        }));
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Compute Pass init"),
+                timestamp_writes: None,
+            });
+            compute_pass.set_pipeline(&pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+
+            let size = _num_of_particles;
+            let x_groups = (size + 255) / 256;
+
+            compute_pass.dispatch_workgroups(x_groups, 1, 1);
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Compute Pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: Default::default(),
         });
 
         Ok(Self {
@@ -160,6 +258,8 @@ impl Ren {
             compute_pipeline: pipeline,
             bind_group: None,
             output_buffer: None,
+            particles,
+            num_of_particles: _num_of_particles,
             dimensions_buffer,
         })
     }
@@ -177,24 +277,22 @@ impl Ren {
             let padded_bytes_per_row = unpadded_bytes_per_row + padded_bytes_per_row_padding;
 
             let size = (padded_bytes_per_row * height) as u64;
-            let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            self.output_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Output Buffer"),
                 size,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
-            });
-            self.output_buffer = Some(output_buffer);
+            }));
 
-            let dimensions = Dimensions {
-                width,
-                height,
-                stride: padded_bytes_per_row / 4,
-                _pad: 0,
-            };
             self.queue.write_buffer(
                 &self.dimensions_buffer,
                 0,
-                bytemuck::cast_slice(&[dimensions]),
+                bytemuck::cast_slice(&[Dimensions {
+                    width,
+                    height,
+                    stride: padded_bytes_per_row / 4,
+                    num_of_particles: self.num_of_particles,
+                }]),
             );
         }
     }
@@ -224,7 +322,7 @@ impl Ren {
             });
 
         let bind_group_layout = self.compute_pipeline.get_bind_group_layout(0);
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        self.bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Compute Bind Group"),
             layout: &bind_group_layout,
             entries: &[
@@ -234,10 +332,14 @@ impl Ren {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
+                    resource: self.particles.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
                     resource: self.dimensions_buffer.as_entire_binding(),
                 },
             ],
-        });
+        }));
 
         {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -245,7 +347,7 @@ impl Ren {
                 timestamp_writes: None,
             });
             compute_pass.set_pipeline(&self.compute_pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
+            compute_pass.set_bind_group(0, &self.bind_group, &[]);
 
             let width = self.config.width;
             let height = self.config.height;
