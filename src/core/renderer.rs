@@ -1,4 +1,4 @@
-use std::{process::exit, sync::Arc};
+use std::{default, process::exit, sync::Arc};
 use wgpu::util::DeviceExt;
 
 use winit::{
@@ -19,6 +19,7 @@ struct Dimensions {
     height: u32,
     stride: u32,
     num_of_particles: u32,
+    frame_time: f32,
 }
 
 #[repr(C)]
@@ -37,11 +38,15 @@ pub struct Ren {
     is_surface_configured: bool,
     pub window: Arc<Window>,
     compute_pipeline: wgpu::ComputePipeline,
+    rendering_pipeline: wgpu::RenderPipeline,
     bind_group: Option<wgpu::BindGroup>,
     output_buffer: Option<wgpu::Buffer>,
     particles: wgpu::Buffer,
     num_of_particles: u32,
     dimensions_buffer: wgpu::Buffer,
+    frame_time: f32,
+    size: (u32, u32),
+    padded_bytes_per_row: u32,
 }
 
 impl Ren {
@@ -108,12 +113,18 @@ impl Ren {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::default(),
+                required_features: wgpu::Features {
+                    features_wgpu: { wgpu::FeaturesWGPU::VERTEX_WRITABLE_STORAGE },
+                    ..wgpu::Features::default()
+                },
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 required_limits: if cfg!(target_arch = "wasm32") {
                     wgpu::Limits::downlevel_webgl2_defaults()
                 } else {
-                    wgpu::Limits::defaults()
+                    wgpu::Limits {
+                        max_storage_buffer_binding_size: 1024 * 1024 * 1024 - 4, // 1GB
+                        ..wgpu::Limits::defaults()
+                    }
                 },
                 memory_hints: Default::default(),
                 trace: wgpu::Trace::Off,
@@ -150,6 +161,40 @@ impl Ren {
             entry_point: Some("init"),
             compilation_options: Default::default(),
             cache: Default::default(),
+        });
+
+        let ren_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("rendering pipeline"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: None,
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::PointList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: None,
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview: None,
+            cache: None,
         });
 
         let dimensions_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -197,6 +242,7 @@ impl Ren {
                 height: size.height,
                 stride: 0,
                 num_of_particles: _num_of_particles,
+                frame_time: 0.0,
             }]),
         );
 
@@ -261,6 +307,10 @@ impl Ren {
             particles,
             num_of_particles: _num_of_particles,
             dimensions_buffer,
+            frame_time: 0.0,
+            size: (size.width, size.height),
+            padded_bytes_per_row: 0,
+            rendering_pipeline: ren_pipeline,
         })
     }
 
@@ -268,6 +318,7 @@ impl Ren {
         if width > 0 && height > 0 {
             self.config.width = width;
             self.config.height = height;
+            self.size = (width, height);
             self.surface.configure(&self.device, &self.config);
             self.is_surface_configured = true;
 
@@ -275,12 +326,14 @@ impl Ren {
             let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
             let padded_bytes_per_row_padding = (align - unpadded_bytes_per_row % align) % align;
             let padded_bytes_per_row = unpadded_bytes_per_row + padded_bytes_per_row_padding;
-
+            self.padded_bytes_per_row = padded_bytes_per_row;
             let size = (padded_bytes_per_row * height) as u64;
             self.output_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Output Buffer"),
                 size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }));
 
@@ -292,6 +345,7 @@ impl Ren {
                     height,
                     stride: padded_bytes_per_row / 4,
                     num_of_particles: self.num_of_particles,
+                    frame_time: self.frame_time,
                 }]),
             );
         }
@@ -306,20 +360,35 @@ impl Ren {
 
     pub fn update(&mut self) {}
 
-    pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+    pub fn render(&mut self, frame_time: f32) -> Result<(), wgpu::SurfaceError> {
         self.window.request_redraw();
+        self.frame_time = frame_time;
+        self.queue.write_buffer(
+            &self.dimensions_buffer,
+            0,
+            bytemuck::cast_slice(&[Dimensions {
+                width: self.size.0,
+                height: self.size.0,
+                stride: self.padded_bytes_per_row / 4,
+                num_of_particles: self.num_of_particles,
+                frame_time: self.frame_time,
+            }]),
+        );
 
         if !self.is_surface_configured || self.output_buffer.is_none() {
             return Ok(());
         }
 
+        //compute
         let output = self.surface.get_current_texture().unwrap();
 
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
+                label: Some("compute Encoder"),
             });
+
+        // encoder.clear_buffer(self.output_buffer.as_ref().unwrap(), 0, None);
 
         let bind_group_layout = self.compute_pipeline.get_bind_group_layout(0);
         self.bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -349,42 +418,106 @@ impl Ren {
             compute_pass.set_pipeline(&self.compute_pipeline);
             compute_pass.set_bind_group(0, &self.bind_group, &[]);
 
-            let width = self.config.width;
-            let height = self.config.height;
-            let x_groups = (width + 15) / 16;
-            let y_groups = (height + 15) / 16;
+            let size = self.num_of_particles;
+            let x_groups = (size + 255) / 256;
 
-            compute_pass.dispatch_workgroups(x_groups, y_groups, 1);
+            compute_pass.dispatch_workgroups(x_groups, 1, 1);
         }
 
-        let unpadded_bytes_per_row = self.config.width * 4;
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padded_bytes_per_row_padding = (align - unpadded_bytes_per_row % align) % align;
-        let padded_bytes_per_row = unpadded_bytes_per_row + padded_bytes_per_row_padding;
+        // let unpadded_bytes_per_row = self.config.width * 4;
+        // let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        // let padded_bytes_per_row_padding = (align - unpadded_bytes_per_row % align) % align;
+        // let padded_bytes_per_row = unpadded_bytes_per_row + padded_bytes_per_row_padding;
 
-        encoder.copy_buffer_to_texture(
-            wgpu::TexelCopyBufferInfo {
-                buffer: self.output_buffer.as_ref().unwrap(),
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_bytes_per_row),
-                    rows_per_image: Some(self.config.height),
-                },
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &output.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: self.config.width,
-                height: self.config.height,
-                depth_or_array_layers: 1,
-            },
-        );
+        // encoder.copy_buffer_to_texture(
+        //     wgpu::TexelCopyBufferInfo {
+        //         buffer: self.output_buffer.as_ref().unwrap(),
+        //         layout: wgpu::TexelCopyBufferLayout {
+        //             offset: 0,
+        //             bytes_per_row: Some(padded_bytes_per_row),
+        //             rows_per_image: Some(self.config.height),
+        //         },
+        //     },
+        //     wgpu::TexelCopyTextureInfo {
+        //         texture: &output.texture,
+        //         mip_level: 0,
+        //         origin: wgpu::Origin3d::ZERO,
+        //         aspect: wgpu::TextureAspect::All,
+        //     },
+        //     wgpu::Extent3d {
+        //         width: self.config.width,
+        //         height: self.config.height,
+        //         depth_or_array_layers: 1,
+        //     },
+        // );
 
         self.queue.submit(std::iter::once(encoder.finish()));
+
+        // rendering
+        // let output = self.surface.get_current_texture().unwrap();
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
+
+        // encoder.clear_buffer(self.output_buffer.as_ref().unwrap(), 0, None);
+
+        let bind_group_layout = self.rendering_pipeline.get_bind_group_layout(0);
+        self.bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("render Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[
+                // wgpu::BindGroupEntry {
+                //     binding: 0,
+                //     resource: self.output_buffer.as_ref().unwrap().as_entire_binding(),
+                // },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.particles.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.dimensions_buffer.as_entire_binding(),
+                },
+            ],
+        }));
+
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("render Pass"),
+                timestamp_writes: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 1.0,
+                            g: 1.0,
+                            b: 1.0,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+            });
+            render_pass.set_pipeline(&self.rendering_pipeline);
+            render_pass.set_bind_group(0, &self.bind_group, &[]);
+
+            // let size = self.num_of_particles;
+            // let x_groups = (size + 255) / 256;
+
+            render_pass.draw(0..self.num_of_particles, 0..1);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+
         output.present();
         return Ok(());
     }

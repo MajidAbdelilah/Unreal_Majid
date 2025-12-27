@@ -17,6 +17,8 @@ pub struct Win {
     ren: Option<Ren>,
     last_fps_update: Option<Instant>,
     frame_count: u32,
+    last_frame_time: Option<Instant>,
+    frame_time: f32,
 }
 
 impl Win {
@@ -29,6 +31,8 @@ impl Win {
             proxy,
             last_fps_update: None,
             frame_count: 0,
+            last_frame_time: None,
+            frame_time: 0.0,
         }
     }
 }
@@ -102,6 +106,13 @@ impl ApplicationHandler<Ren> for Win {
             WindowEvent::Resized(size) => ren.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
                 self.frame_count += 1;
+                if !self.last_frame_time.is_none() {
+                    let now = Instant::now();
+                    let elapsed = now.duration_since(self.last_frame_time.unwrap());
+                    self.frame_time = elapsed.as_secs_f32();
+                }
+                self.last_frame_time = Some(Instant::now());
+
                 if self.last_fps_update.is_none() {
                     self.last_fps_update = Some(Instant::now());
                 }
@@ -120,7 +131,7 @@ impl ApplicationHandler<Ren> for Win {
                 }
 
                 ren.update();
-                match ren.render() {
+                match ren.render(self.frame_time) {
                     Ok(_) => {}
                     Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                         let size = ren.window.inner_size();

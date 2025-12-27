@@ -3,6 +3,7 @@ struct Dimensions {
     height: u32,
     stride: u32,
     num_of_particles: u32,
+    frame_time: f32,
 }
 
 struct particle {
@@ -20,27 +21,51 @@ var<storage, read_write> particles: array<particle>;
 @group(0) @binding(2)
 var<uniform> dimensions: Dimensions;
 
-@compute @workgroup_size(16, 16)
+fn hash(value: u32) -> u32 {
+    var state = value;
+    state = state ^ 2747636419u;
+    state = state * 2654435769u;
+    state = state ^ state >> 16u;
+    state = state * 2654435769u;
+    state = state ^ state >> 16u;
+    state = state * 2654435769u;
+    return state;
+}
+
+fn randomFloat(value: u32) -> f32 {
+    return f32(hash(value)) / 4294967295.0;
+}
+
+@compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let coords = global_id.xy;
 
-    if (coords.x >= dimensions.width || coords.y >= dimensions.height) {
+    if (global_id.x > dimensions.num_of_particles) {
         return;
     }
 
-    let index = coords.y * dimensions.stride + coords.x;
+    particles[global_id.x].speed += particles[global_id.x].accel * dimensions.frame_time;
+    particles[global_id.x].pos += particles[global_id.x].speed * dimensions.frame_time;
+
+    let x: u32 = u32(particles[global_id.x].pos.x);
+    let y: u32 = u32(particles[global_id.x].pos.y);
+    if (x > dimensions.width || x < 0 || y > dimensions.height || y < 0) {
+        return;
+    }
+
+    let index: u32 = y * dimensions.stride + x;
 
     // Dummy usage to prevent optimization
-    if (index == 0u) {
-        particles[0].pos = vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    }
+    // if (index == 0u) {
+    //     particles[0].pos = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    // }
 
     // Alpha = 255
     var color: u32 = 0xFF000000u;
 
-    var left: bool = coords.x < dimensions.width / 2u;
+    var left: bool = x < dimensions.width / 2u;
     var right: bool = !left;
-    var up: bool = coords.y < dimensions.height / 2u;
+    var up: bool = y < dimensions.height / 2u;
     var down: bool = !up;
 
     // red mask
@@ -68,7 +93,44 @@ fn init(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    particles[global_id.x] = particle(vec4<f32>(1.0, 1.0, 1.0, 1.0), // pos
+    particles[global_id.x] = particle(vec4<f32>(randomFloat(global_id.x) * 1920, randomFloat(global_id.x * 2) * 1080.0, 1.0, 1.0), // pos
     vec4<f32>(0.0), // speed
-    vec4<f32>(1.0, 0.5, 0.0, 0.0) /* accel */);
+    vec4<f32>(randomFloat(global_id.x) * 20.0 - 10.0, randomFloat(global_id.x * 2) * 20.0 - 10.0, 0.0, 0.0) /* accel */);
+}
+
+struct VertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
+    var out: VertexOutput;
+    let particle = particles[in_vertex_index];
+
+    // Map 0..width to -1..1
+    let x = (particle.pos.x / f32(dimensions.width)) * 2.0 - 1.0;
+    let y = (particle.pos.y / f32(dimensions.height)) * 2.0 - 1.0;
+
+    // Flip Y because WGPU/Vulkan Y is down? No, WGPU Y is up in clip space (-1 is bottom, 1 is top).
+    // Screen coords usually 0,0 top-left.
+    // If particle.pos.y is 0 (top), we want 1.0.
+    // If particle.pos.y is height (bottom), we want -1.0.
+    // So: 1.0 - (y / height * 2.0)
+
+    let ndc_x = (particle.pos.x / f32(dimensions.width)) * 2.0 - 1.0;
+    let ndc_y = 1.0 - (particle.pos.y / f32(dimensions.height)) * 2.0;
+
+    out.clip_position = vec4<f32>(ndc_x, ndc_y, 0.0, 1.0);
+    out.color = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+
+    // Point size is not supported in WebGPU directly in the vertex shader (needs point-list topology)
+    // But we can just draw points.
+
+    return out;
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return in.color;
 }
