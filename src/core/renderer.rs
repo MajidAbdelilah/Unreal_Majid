@@ -368,7 +368,12 @@ impl Ren {
                 num_of_particles: _num_of_particles,
                 frame_time: 0.0,
                 _pad: [0; 3],
-                proj: perspective(45.0f32.to_radians(), size.width as f32 / size.height as f32, 0.1, 1000.0),
+                proj: perspective(
+                    45.0f32.to_radians(),
+                    size.width as f32 / size.height as f32,
+                    0.1,
+                    1000.0,
+                ),
                 view: look_at(&[0.0, 0.0, 100.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
             }]),
         );
@@ -474,7 +479,12 @@ impl Ren {
                     num_of_particles: self.num_of_particles,
                     frame_time: self.frame_time,
                     _pad: [0; 3],
-                    proj: perspective(45.0f32.to_radians(), width as f32 / height as f32, 0.1, 1000.0),
+                    proj: perspective(
+                        45.0f32.to_radians(),
+                        width as f32 / height as f32,
+                        0.1,
+                        1000.0,
+                    ),
                     view: look_at(&[0.0, 0.0, 100.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
                 }]),
             );
@@ -503,7 +513,12 @@ impl Ren {
                 num_of_particles: self.num_of_particles,
                 frame_time: self.frame_time,
                 _pad: [0; 3],
-                proj: perspective(45.0f32.to_radians(), self.size.0 as f32 / self.size.1 as f32, 0.1, 1000.0),
+                proj: perspective(
+                    45.0f32.to_radians(),
+                    self.size.0 as f32 / self.size.1 as f32,
+                    0.1,
+                    1000.0,
+                ),
                 view: look_at(&[0.0, 0.0, 100.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
             }]),
         );
