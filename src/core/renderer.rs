@@ -26,7 +26,8 @@ struct Dimensions {
     stride: u32,
     num_of_particles: u32,
     frame_time: f32,
-    _pad: [u32; 3],
+    _pad: [u32; 1],
+    pointer_pos: [u32; 2],
     proj: Mat4f,
     view: Mat4f,
 }
@@ -171,6 +172,8 @@ pub struct Ren {
     frame_time: f32,
     size: (u32, u32),
     padded_bytes_per_row: u32,
+    pointer_pos: [u32; 2],
+    projection: Mat4f,
 }
 
 impl Ren {
@@ -358,6 +361,13 @@ impl Ren {
             mapped_at_creation: false,
         });
 
+        let projection = perspective(
+            90.0f32.to_radians(),
+            size.width as f32 / size.height as f32,
+            0.01,
+            10000.0,
+        );
+
         queue.write_buffer(
             &dimensions_buffer,
             0,
@@ -367,14 +377,10 @@ impl Ren {
                 stride: 0,
                 num_of_particles: _num_of_particles,
                 frame_time: 0.0,
-                _pad: [0; 3],
-                proj: perspective(
-                    45.0f32.to_radians(),
-                    size.width as f32 / size.height as f32,
-                    0.1,
-                    1000.0,
-                ),
-                view: look_at(&[0.0, 0.0, 100.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
+                _pad: [0; 1],
+                proj: projection,
+                view: look_at(&[0.0, 0.0, -200.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
+                pointer_pos: [0, 0],
             }]),
         );
 
@@ -443,6 +449,8 @@ impl Ren {
             size: (size.width, size.height),
             padded_bytes_per_row: 0,
             rendering_pipeline: ren_pipeline,
+            pointer_pos: [0, 0],
+            projection,
         })
     }
 
@@ -453,6 +461,13 @@ impl Ren {
             self.size = (width, height);
             self.surface.configure(&self.device, &self.config);
             self.is_surface_configured = true;
+
+            self.projection = perspective(
+                90.0f32.to_radians(),
+                width as f32 / height as f32,
+                0.01,
+                10000.0,
+            );
 
             let unpadded_bytes_per_row = width * 4;
             let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -478,14 +493,10 @@ impl Ren {
                     stride: padded_bytes_per_row / 4,
                     num_of_particles: self.num_of_particles,
                     frame_time: self.frame_time,
-                    _pad: [0; 3],
-                    proj: perspective(
-                        45.0f32.to_radians(),
-                        width as f32 / height as f32,
-                        0.1,
-                        1000.0,
-                    ),
-                    view: look_at(&[0.0, 0.0, 100.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
+                    _pad: [0; 1],
+                    proj: self.projection,
+                    view: look_at(&[0.0, 0.0, -200.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
+                    pointer_pos: self.pointer_pos,
                 }]),
             );
         }
@@ -500,9 +511,14 @@ impl Ren {
 
     pub fn update(&mut self) {}
 
-    pub fn render(&mut self, frame_time: f32) -> Result<(), wgpu::SurfaceError> {
+    pub fn render(
+        &mut self,
+        frame_time: f32,
+        pointer_pos: [u32; 2],
+    ) -> Result<(), wgpu::SurfaceError> {
         self.window.request_redraw();
         self.frame_time = frame_time;
+        self.pointer_pos = pointer_pos;
         self.queue.write_buffer(
             &self.dimensions_buffer,
             0,
@@ -512,14 +528,10 @@ impl Ren {
                 stride: self.padded_bytes_per_row / 4,
                 num_of_particles: self.num_of_particles,
                 frame_time: self.frame_time,
-                _pad: [0; 3],
-                proj: perspective(
-                    45.0f32.to_radians(),
-                    self.size.0 as f32 / self.size.1 as f32,
-                    0.1,
-                    1000.0,
-                ),
-                view: look_at(&[0.0, 0.0, 100.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
+                _pad: [0; 1],
+                proj: self.projection,
+                view: look_at(&[0.0, 0.0, -200.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
+                pointer_pos: self.pointer_pos,
             }]),
         );
 
@@ -543,10 +555,6 @@ impl Ren {
             label: Some("Compute Bind Group"),
             layout: &bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.output_buffer.as_ref().unwrap().as_entire_binding(),
-                },
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: self.particles.as_entire_binding(),

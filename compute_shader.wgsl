@@ -5,8 +5,7 @@ struct Dimensions {
     num_of_particles: u32,
     frame_time: f32,
     _pad1: u32,
-    _pad2: u32,
-    _pad3: u32,
+    pointer_pos: vec2<u32>,
     proj: mat4x4<f32>,
     view: mat4x4<f32>,
 }
@@ -16,9 +15,6 @@ struct particle {
     speed: vec4<f32>,
     accel: vec4<f32>,
 }
-
-@group(0) @binding(0)
-var<storage, read_write> output_buffer: array<u32>;
 
 @group(0) @binding(1)
 var<storage, read_write> particles: array<particle>;
@@ -51,45 +47,29 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     particles[global_id.x].speed += particles[global_id.x].accel * dimensions.frame_time;
     particles[global_id.x].pos += particles[global_id.x].speed * dimensions.frame_time;
+    particles[global_id.x].speed *= 0.999;
 
-    let x: u32 = u32(particles[global_id.x].pos.x);
-    let y: u32 = u32(particles[global_id.x].pos.y);
-    if (x > dimensions.width || x < 0 || y > dimensions.height || y < 0) {
-        return;
-    }
+    // Calculate world position of the mouse
+    // Camera setup assumptions: Z=100, FOV=45 deg
+    let fov = radians(90.0);
+    let camera_z = - 200.0;
+    let view_height_at_z0 = 2.0 * camera_z * tan(fov * 0.5);
+    let view_width_at_z0 = view_height_at_z0 * (f32(dimensions.width) / f32(dimensions.height));
 
-    let index: u32 = y * dimensions.stride + x;
+    let ndc_x = (f32(dimensions.pointer_pos.x) / f32(dimensions.width)) * 2.0 - 1.0;
+    let ndc_y = (f32(dimensions.pointer_pos.y) / f32(dimensions.height)) * 2.0 - 1.0;
 
-    // Dummy usage to prevent optimization
-    // if (index == 0u) {
-    //     particles[0].pos = vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    // }
+    let target_pos = vec3<f32>(ndc_x * view_width_at_z0 * 0.5, ndc_y * view_height_at_z0 * 0.5, 0.0);
 
-    // Alpha = 255
-    var color: u32 = 0xFF000000u;
+    let diff = target_pos - particles[global_id.x].pos.xyz;
+    let dist_sq = dot(diff, diff);
+    let dir = normalize(diff);
 
-    var left: bool = x < dimensions.width / 2u;
-    var right: bool = !left;
-    var up: bool = y < dimensions.height / 2u;
-    var down: bool = !up;
+    // Attraction force (Gravity-like: F = G / r^2)
+    // Added epsilon (100.0) to prevent division by zero and extreme forces
+    let force_mag = 100000.0 / (dist_sq + 100.0);
 
-    // red mask
-    var left_up_mask: u32 = u32(left & up) * 0xffffffffu;
-    var left_down_mask: u32 = u32(left & down) * 0xffffffffu;
-
-    var right_up_mask: u32 = u32(right & up) * 0xffffffffu;
-    var right_down_mask: u32 = u32(right & down) * 0xffffffffu;
-
-    color |= 0x000000FFu & left_up_mask;
-    // Red (0xAABBGGRR) -> 0xFF0000FF
-    color |= 0x0000FF00u & left_down_mask;
-    // Green
-    color |= 0x00FF0000u & right_up_mask;
-    // Blue
-    color |= 0x0000FFFFu & right_down_mask;
-    // Yellow (Red + Green) -> 0xFF00FFFF
-
-    output_buffer[index] = color;
+    particles[global_id.x].accel = vec4<f32>(dir * force_mag, 0.0);
 }
 
 @compute @workgroup_size(256)
@@ -98,9 +78,11 @@ fn init(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    particles[global_id.x] = particle(vec4<f32>(randomFloat(global_id.x) * 50.0 + 50.0, randomFloat(global_id.x * 2) * 50.0 + 50.0, randomFloat(global_id.x * 3) * 50.0 - 500.0, 1.0), // pos
-    vec4<f32>(0.0), // speed
-    vec4<f32>(randomFloat(global_id.x) * 20.0 - 10.0, randomFloat(global_id.x * 2) * 20.0 - 10.0, 0.0, 0.0) /* accel */);
+    particles[global_id.x] = particle(vec4<f32>(randomFloat(global_id.x) * 50.0 - 25.0, randomFloat(global_id.x * 2) * 50.0 - 25.0, randomFloat(global_id.x * 3) * - 50.0 + 25.0, 1.0), // pos
+    // vec4<f32>(randomFloat(global_id.x) * 20.0 - 10.0, randomFloat(global_id.x * 2) * 20.0 - 10.0, randomFloat(global_id.x * 4) * 20.0 - 10.0, 1.0), // speed
+    vec4<f32>(0.0, 0.0, 0.0, 0.0), /* accel */
+
+    vec4<f32>(0.0, 0.0, 0.0, 0.0) /* accel */);
 }
 
 struct VertexOutput {
@@ -111,8 +93,26 @@ struct VertexOutput {
 @vertex
 fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
     var out: VertexOutput;
-    let particle = particles[in_vertex_index];
 
+    // Calculate world position of the mouse (same logic as compute)
+    let fov = radians(45.0);
+    let camera_z = 100.0;
+    let view_height_at_z0 = 2.0 * camera_z * tan(fov * 0.5);
+    let view_width_at_z0 = view_height_at_z0 * (f32(dimensions.width) / f32(dimensions.height));
+
+    let ndc_x = (f32(dimensions.pointer_pos.x) / f32(dimensions.width)) * 2.0 - 1.0;
+    let ndc_y = (f32(dimensions.pointer_pos.y) / f32(dimensions.height)) * 2.0 - 1.0;
+
+    let target_pos = vec3<f32>(ndc_x * view_width_at_z0 * 0.5, ndc_y * view_height_at_z0 * 0.5, 0.0);
+
+    if (in_vertex_index == 0u) {
+        // Draw cursor at target_pos
+        out.clip_position = dimensions.proj * dimensions.view * vec4<f32>(target_pos, 1.0);
+        out.color = vec4<f32>(1.0, 0.0, 0.0, 1.0);
+        return out;
+    }
+
+    let particle = particles[in_vertex_index];
     out.clip_position = dimensions.proj * dimensions.view * vec4<f32>(particle.pos.xyz, 1.0);
     out.color = vec4<f32>(0.0, 0.0, 0.0, 1.0);
 

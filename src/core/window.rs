@@ -19,6 +19,7 @@ pub struct Win {
     frame_count: u32,
     last_frame_time: Option<Instant>,
     frame_time: f32,
+    pointer_pos: [u32; 2],
 }
 
 impl Win {
@@ -33,6 +34,7 @@ impl Win {
             frame_count: 0,
             last_frame_time: None,
             frame_time: 0.0,
+            pointer_pos: [0, 0],
         }
     }
 }
@@ -131,7 +133,7 @@ impl ApplicationHandler<Ren> for Win {
                 }
 
                 ren.update();
-                match ren.render(self.frame_time) {
+                match ren.render(self.frame_time, self.pointer_pos) {
                     Ok(_) => {}
                     Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                         let size = ren.window.inner_size();
@@ -151,6 +153,14 @@ impl ApplicationHandler<Ren> for Win {
                     },
                 ..
             } => ren.handle_key(event_loop, code, key_state.is_pressed()),
+            WindowEvent::CursorMoved {
+                device_id,
+                position,
+            } => {
+                self.pointer_pos[0] = position.x as u32;
+                self.pointer_pos[1] = position.y as u32;
+                println!("pointer pos: {:?}", self.pointer_pos);
+            }
             _ => {}
         }
     }
