@@ -4,6 +4,11 @@ struct Dimensions {
     stride: u32,
     num_of_particles: u32,
     frame_time: f32,
+    _pad1: u32,
+    _pad2: u32,
+    _pad3: u32,
+    proj: mat4x4<f32>,
+    view: mat4x4<f32>,
 }
 
 struct particle {
@@ -93,7 +98,7 @@ fn init(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    particles[global_id.x] = particle(vec4<f32>(randomFloat(global_id.x) * 1920, randomFloat(global_id.x * 2) * 1080.0, 1.0, 1.0), // pos
+    particles[global_id.x] = particle(vec4<f32>(randomFloat(global_id.x) * 50.0 + 50.0, randomFloat(global_id.x * 2) * 50.0 + 50.0, randomFloat(global_id.x * 3) * 50.0 - 500.0, 1.0), // pos
     vec4<f32>(0.0), // speed
     vec4<f32>(randomFloat(global_id.x) * 20.0 - 10.0, randomFloat(global_id.x * 2) * 20.0 - 10.0, 0.0, 0.0) /* accel */);
 }
@@ -108,20 +113,7 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
     var out: VertexOutput;
     let particle = particles[in_vertex_index];
 
-    // Map 0..width to -1..1
-    let x = (particle.pos.x / f32(dimensions.width)) * 2.0 - 1.0;
-    let y = (particle.pos.y / f32(dimensions.height)) * 2.0 - 1.0;
-
-    // Flip Y because WGPU/Vulkan Y is down? No, WGPU Y is up in clip space (-1 is bottom, 1 is top).
-    // Screen coords usually 0,0 top-left.
-    // If particle.pos.y is 0 (top), we want 1.0.
-    // If particle.pos.y is height (bottom), we want -1.0.
-    // So: 1.0 - (y / height * 2.0)
-
-    let ndc_x = (particle.pos.x / f32(dimensions.width)) * 2.0 - 1.0;
-    let ndc_y = 1.0 - (particle.pos.y / f32(dimensions.height)) * 2.0;
-
-    out.clip_position = vec4<f32>(ndc_x, ndc_y, 0.0, 1.0);
+    out.clip_position = dimensions.proj * dimensions.view * vec4<f32>(particle.pos.xyz, 1.0);
     out.color = vec4<f32>(0.0, 0.0, 0.0, 1.0);
 
     // Point size is not supported in WebGPU directly in the vertex shader (needs point-list topology)

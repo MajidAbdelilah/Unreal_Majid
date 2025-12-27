@@ -14,12 +14,21 @@ use wasm_bindgen::prelude::*;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Mat4f {
+    data: [[f32; 4]; 4],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Dimensions {
     width: u32,
     height: u32,
     stride: u32,
     num_of_particles: u32,
     frame_time: f32,
+    _pad: [u32; 3],
+    proj: Mat4f,
+    view: Mat4f,
 }
 
 #[repr(C)]
@@ -28,6 +37,121 @@ struct Particle {
     pos: [f32; 4],
     speed: [f32; 4],
     accel: [f32; 4],
+}
+
+fn dot(a: &[f32; 3], b: &[f32; 3]) -> f32 {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+// Compute the cross product of two [f32; 3] vectors.
+fn cross(a: &[f32; 3], b: &[f32; 3]) -> [f32; 3] {
+    return [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ];
+}
+
+pub fn vec3_normalize(v: [f32; 3]) -> [f32; 3] {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if len > 0.0 {
+        [v[0] / len, v[1] / len, v[2] / len]
+    } else {
+        v
+    }
+}
+
+fn look_at(&position: &[f32; 3], &lookat: &[f32; 3], &up: &[f32; 3]) -> Mat4f {
+    let mut look_at = lookat.clone();
+    look_at[0] -= position[0];
+    look_at[1] -= position[1];
+    look_at[2] -= position[2];
+
+    let f: &[f32; 3] = &vec3_normalize(look_at); // Camera's direction vector
+    let s: &[f32; 3] = &vec3_normalize(cross(f, &up)); // Camera's right vector
+    let u: &[f32; 3] = &cross(s, f); // Camera's corrected up vector
+
+    let mut result: Mat4f = Mat4f {
+        data: [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+    };
+    result.data[0][0] = s[0];
+    result.data[0][1] = u[0];
+    result.data[0][2] = -f[0];
+    result.data[0][3] = 0.0;
+
+    result.data[1][0] = s[1];
+    result.data[1][1] = u[1];
+    result.data[1][2] = -f[1];
+    result.data[1][3] = 0.0;
+
+    result.data[2][0] = s[2];
+    result.data[2][1] = u[2];
+    result.data[2][2] = -f[2];
+    result.data[2][3] = 0.0;
+
+    result.data[3][0] = -dot(s, &position);
+    result.data[3][1] = -dot(u, &position);
+    result.data[3][2] = dot(f, &position);
+    result.data[3][3] = 1.0;
+
+    return result;
+}
+
+#[allow(dead_code)]
+fn identity() -> Mat4f {
+    Mat4f {
+        data: [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+    }
+}
+
+// Replace the old perspective(...) with a simpler, OpenGL-friendly one.
+// Now takes fov_y (radians) and aspect ratio, returns column-major mat4 (data[column][row]).
+fn perspective(fov_y: f32, aspect: f32, near: f32, far: f32) -> Mat4f {
+    // f = 1 / tan(fov_y/2)
+    let f = 1.0 / (fov_y * 0.5).tan();
+
+    let mut m = Mat4f {
+        data: [[0.0; 4]; 4],
+    };
+
+    // Column-major layout: data[column][row]
+    // Column 0
+    m.data[0][0] = f / aspect;
+    m.data[0][1] = 0.0;
+    m.data[0][2] = 0.0;
+    m.data[0][3] = 0.0;
+
+    // Column 1
+    m.data[1][0] = 0.0;
+    m.data[1][1] = f;
+    m.data[1][2] = 0.0;
+    m.data[1][3] = 0.0;
+
+    // Column 2
+    // WebGPU uses Z in [0, 1]
+    // z_ndc = far / (near - far) * z_eye + (far * near) / (near - far) * w_eye
+    m.data[2][0] = 0.0;
+    m.data[2][1] = 0.0;
+    m.data[2][2] = far / (near - far);
+    m.data[2][3] = -1.0;
+
+    // Column 3
+    m.data[3][0] = 0.0;
+    m.data[3][1] = 0.0;
+    m.data[3][2] = (far * near) / (near - far);
+    m.data[3][3] = 0.0;
+
+    m
 }
 
 pub struct Ren {
@@ -243,6 +367,9 @@ impl Ren {
                 stride: 0,
                 num_of_particles: _num_of_particles,
                 frame_time: 0.0,
+                _pad: [0; 3],
+                proj: perspective(45.0f32.to_radians(), size.width as f32 / size.height as f32, 0.1, 1000.0),
+                view: look_at(&[0.0, 0.0, 100.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
             }]),
         );
 
@@ -346,6 +473,9 @@ impl Ren {
                     stride: padded_bytes_per_row / 4,
                     num_of_particles: self.num_of_particles,
                     frame_time: self.frame_time,
+                    _pad: [0; 3],
+                    proj: perspective(45.0f32.to_radians(), width as f32 / height as f32, 0.1, 1000.0),
+                    view: look_at(&[0.0, 0.0, 100.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
                 }]),
             );
         }
@@ -368,10 +498,13 @@ impl Ren {
             0,
             bytemuck::cast_slice(&[Dimensions {
                 width: self.size.0,
-                height: self.size.0,
+                height: self.size.1,
                 stride: self.padded_bytes_per_row / 4,
                 num_of_particles: self.num_of_particles,
                 frame_time: self.frame_time,
+                _pad: [0; 3],
+                proj: perspective(45.0f32.to_radians(), self.size.0 as f32 / self.size.1 as f32, 0.1, 1000.0),
+                view: look_at(&[0.0, 0.0, 100.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
             }]),
         );
 
