@@ -47,7 +47,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     particles[global_id.x].speed += particles[global_id.x].accel * dimensions.frame_time;
     particles[global_id.x].pos += particles[global_id.x].speed * dimensions.frame_time;
-    particles[global_id.x].speed *= 0.999;
+    particles[global_id.x].speed *= 0.99;
 
     // Calculate world position of the mouse
     // Camera setup assumptions: Z=100, FOV=45 deg
