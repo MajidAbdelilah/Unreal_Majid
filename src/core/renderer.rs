@@ -53,9 +53,9 @@ impl Camera {
         Self {
             position: [0.0, 0.0, -200.0],
             yaw: -90.0f32.to_radians(), // Pointing along +Z? Old code: -200 to 0 -> +Z direction.
-                                        // If yaw=0 is +X, yaw=90 is +Z? 
-                                        // cos(-90)=0, sin(-90)=-1 (if Z=sin).
-                                        // Let's stick to standard math.
+            // If yaw=0 is +X, yaw=90 is +Z?
+            // cos(-90)=0, sin(-90)=-1 (if Z=sin).
+            // Let's stick to standard math.
             pitch: 0.0,
         }
     }
@@ -67,27 +67,19 @@ impl Camera {
         // Forward vector (Standard OpenGL: Camera looks down -Z by default, so 'forward' is -Z in view space)
         // But in World Space, we define where it looks.
         // Y is Up.
-        let forward = [
-            cos_p * cos_y,
-            sin_p,
-            cos_p * sin_y
-        ];
+        let forward = [cos_p * cos_y, sin_p, cos_p * sin_y];
         let forward = vec3_normalize(forward);
-        
+
         // Target = pos + forward
         let target = vec3_add(&self.position, &forward);
-        
+
         look_at(&self.position, &target, &[0.0, 1.0, 0.0])
     }
-    
+
     pub fn get_forward(&self) -> [f32; 3] {
         let (sin_y, cos_y) = self.yaw.sin_cos();
         let (sin_p, cos_p) = self.pitch.sin_cos();
-        let f = [
-            cos_p * cos_y,
-            sin_p,
-            cos_p * sin_y
-        ];
+        let f = [cos_p * cos_y, sin_p, cos_p * sin_y];
         vec3_normalize(f)
     }
 
@@ -109,7 +101,6 @@ fn vec3_sub(a: &[f32; 3], b: &[f32; 3]) -> [f32; 3] {
 fn vec3_scale(a: &[f32; 3], s: f32) -> [f32; 3] {
     [a[0] * s, a[1] * s, a[2] * s]
 }
-
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -608,14 +599,14 @@ impl Ren {
         let sensitivity = 0.002;
         self.camera.yaw += delta_x as f32 * sensitivity;
         self.camera.pitch -= delta_y as f32 * sensitivity; // Invert Y usually
-        
+
         let limit = std::f32::consts::FRAC_PI_2 - 0.01;
         self.camera.pitch = self.camera.pitch.clamp(-limit, limit);
     }
 
     pub fn update(&mut self) {
         let speed = 200.0 * self.frame_time;
-        
+
         let forward = self.camera.get_forward();
         let right = self.camera.get_right();
         let up = [0.0, 1.0, 0.0];
@@ -681,8 +672,8 @@ impl Ren {
 
         // Fixed distance from camera (allows 3D movement of attractor)
         // This solves the issue of particles flattening on Z=0
-        let t = 200.0; 
-        
+        let t = 200.0;
+
         let p = vec3_add(&self.camera.position, &vec3_scale(&ray_dir, t));
         let target_pos = [p[0], p[1], p[2], 0.0];
 
