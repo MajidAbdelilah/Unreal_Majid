@@ -5,7 +5,8 @@ struct Dimensions {
     num_of_particles: u32,
     frame_time: f32,
     _pad1: u32,
-    pointer_pos: vec2<u32>,
+    _pad2: vec2<u32>,
+    target_pos: vec4<f32>,
     proj: mat4x4<f32>,
     view: mat4x4<f32>,
 }
@@ -49,17 +50,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     particles[global_id.x].pos += particles[global_id.x].speed * dimensions.frame_time;
     particles[global_id.x].speed *= 0.99;
 
-    // Calculate world position of the mouse
-    // Camera setup assumptions: Z=100, FOV=45 deg
-    let fov = radians(90.0);
-    let camera_z = - 200.0;
-    let view_height_at_z0 = 2.0 * camera_z * tan(fov * 0.5);
-    let view_width_at_z0 = view_height_at_z0 * (f32(dimensions.width) / f32(dimensions.height));
-
-    let ndc_x = (f32(dimensions.pointer_pos.x) / f32(dimensions.width)) * 2.0 - 1.0;
-    let ndc_y = (f32(dimensions.pointer_pos.y) / f32(dimensions.height)) * 2.0 - 1.0;
-
-    let target_pos = vec3<f32>(ndc_x * view_width_at_z0 * 0.5, ndc_y * view_height_at_z0 * 0.5, 0.0);
+    let target_pos = dimensions.target_pos.xyz;
 
     let diff = target_pos - particles[global_id.x].pos.xyz;
     let dist_sq = dot(diff, diff);
@@ -94,16 +85,7 @@ struct VertexOutput {
 fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
     var out: VertexOutput;
 
-    // Calculate world position of the mouse (same logic as compute)
-    let fov = radians(45.0);
-    let camera_z = 100.0;
-    let view_height_at_z0 = 2.0 * camera_z * tan(fov * 0.5);
-    let view_width_at_z0 = view_height_at_z0 * (f32(dimensions.width) / f32(dimensions.height));
-
-    let ndc_x = (f32(dimensions.pointer_pos.x) / f32(dimensions.width)) * 2.0 - 1.0;
-    let ndc_y = (f32(dimensions.pointer_pos.y) / f32(dimensions.height)) * 2.0 - 1.0;
-
-    let target_pos = vec3<f32>(ndc_x * view_width_at_z0 * 0.5, ndc_y * view_height_at_z0 * 0.5, 0.0);
+    let target_pos = dimensions.target_pos.xyz;
 
     if (in_vertex_index == 0u) {
         // Draw cursor at target_pos

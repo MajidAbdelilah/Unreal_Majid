@@ -26,11 +26,90 @@ struct Dimensions {
     stride: u32,
     num_of_particles: u32,
     frame_time: f32,
-    _pad: [u32; 1],
-    pointer_pos: [u32; 2],
+    _pad: [u32; 3],
+    target_pos: [f32; 4],
     proj: Mat4f,
     view: Mat4f,
 }
+
+#[derive(Default)]
+pub struct InputState {
+    pub forward: bool,
+    pub backward: bool,
+    pub left: bool,
+    pub right: bool,
+    pub up: bool,
+    pub down: bool,
+}
+
+pub struct Camera {
+    pub position: [f32; 3],
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+impl Camera {
+    pub fn new() -> Self {
+        Self {
+            position: [0.0, 0.0, -200.0],
+            yaw: -90.0f32.to_radians(), // Pointing along +Z? Old code: -200 to 0 -> +Z direction.
+                                        // If yaw=0 is +X, yaw=90 is +Z? 
+                                        // cos(-90)=0, sin(-90)=-1 (if Z=sin).
+                                        // Let's stick to standard math.
+            pitch: 0.0,
+        }
+    }
+
+    pub fn get_view_matrix(&self) -> Mat4f {
+        let (sin_y, cos_y) = self.yaw.sin_cos();
+        let (sin_p, cos_p) = self.pitch.sin_cos();
+
+        // Forward vector (Standard OpenGL: Camera looks down -Z by default, so 'forward' is -Z in view space)
+        // But in World Space, we define where it looks.
+        // Y is Up.
+        let forward = [
+            cos_p * cos_y,
+            sin_p,
+            cos_p * sin_y
+        ];
+        let forward = vec3_normalize(forward);
+        
+        // Target = pos + forward
+        let target = vec3_add(&self.position, &forward);
+        
+        look_at(&self.position, &target, &[0.0, 1.0, 0.0])
+    }
+    
+    pub fn get_forward(&self) -> [f32; 3] {
+        let (sin_y, cos_y) = self.yaw.sin_cos();
+        let (sin_p, cos_p) = self.pitch.sin_cos();
+        let f = [
+            cos_p * cos_y,
+            sin_p,
+            cos_p * sin_y
+        ];
+        vec3_normalize(f)
+    }
+
+    pub fn get_right(&self) -> [f32; 3] {
+        let f = self.get_forward();
+        let up = [0.0, 1.0, 0.0];
+        vec3_normalize(cross(&f, &up)) // Cross logic: Right Hand?
+    }
+}
+
+fn vec3_add(a: &[f32; 3], b: &[f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn vec3_sub(a: &[f32; 3], b: &[f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn vec3_scale(a: &[f32; 3], s: f32) -> [f32; 3] {
+    [a[0] * s, a[1] * s, a[2] * s]
+}
+
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -174,6 +253,8 @@ pub struct Ren {
     padded_bytes_per_row: u32,
     pointer_pos: [u32; 2],
     projection: Mat4f,
+    pub camera: Camera,
+    pub input_state: InputState,
 }
 
 impl Ren {
@@ -377,10 +458,10 @@ impl Ren {
                 stride: 0,
                 num_of_particles: _num_of_particles,
                 frame_time: 0.0,
-                _pad: [0; 1],
+                _pad: [0; 3],
+                target_pos: [0.0; 4],
                 proj: projection,
                 view: look_at(&[0.0, 0.0, -200.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
-                pointer_pos: [0, 0],
             }]),
         );
 
@@ -451,10 +532,14 @@ impl Ren {
             rendering_pipeline: ren_pipeline,
             pointer_pos: [0, 0],
             projection,
+            camera: Camera::new(),
+            input_state: InputState::default(),
         })
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
+        self.window.request_redraw();
+
         if width > 0 && height > 0 {
             self.config.width = width;
             self.config.height = height;
@@ -493,23 +578,67 @@ impl Ren {
                     stride: padded_bytes_per_row / 4,
                     num_of_particles: self.num_of_particles,
                     frame_time: self.frame_time,
-                    _pad: [0; 1],
+                    _pad: [0; 3],
+                    target_pos: [0.0; 4],
                     proj: self.projection,
-                    view: look_at(&[0.0, 0.0, -200.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
-                    pointer_pos: self.pointer_pos,
+                    view: self.camera.get_view_matrix(),
                 }]),
             );
         }
     }
 
-    pub fn handle_key(&self, event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
-        match (code, is_pressed) {
-            (KeyCode::Escape, true) => event_loop.exit(),
+    pub fn handle_key(&mut self, event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
+        match code {
+            KeyCode::KeyW => self.input_state.forward = is_pressed,
+            KeyCode::KeyS => self.input_state.backward = is_pressed,
+            KeyCode::KeyA => self.input_state.left = is_pressed,
+            KeyCode::KeyD => self.input_state.right = is_pressed,
+            KeyCode::KeyQ | KeyCode::Space => self.input_state.up = is_pressed,
+            KeyCode::KeyE | KeyCode::ShiftLeft => self.input_state.down = is_pressed,
+            KeyCode::Escape => {
+                if is_pressed {
+                    event_loop.exit()
+                }
+            }
             _ => {}
         }
     }
 
-    pub fn update(&mut self) {}
+    pub fn handle_mouse_motion(&mut self, delta_x: f64, delta_y: f64) {
+        let sensitivity = 0.002;
+        self.camera.yaw += delta_x as f32 * sensitivity;
+        self.camera.pitch -= delta_y as f32 * sensitivity; // Invert Y usually
+        
+        let limit = std::f32::consts::FRAC_PI_2 - 0.01;
+        self.camera.pitch = self.camera.pitch.clamp(-limit, limit);
+    }
+
+    pub fn update(&mut self) {
+        let speed = 200.0 * self.frame_time;
+        
+        let forward = self.camera.get_forward();
+        let right = self.camera.get_right();
+        let up = [0.0, 1.0, 0.0];
+
+        if self.input_state.forward {
+            self.camera.position = vec3_add(&self.camera.position, &vec3_scale(&forward, speed));
+        }
+        if self.input_state.backward {
+            self.camera.position = vec3_sub(&self.camera.position, &vec3_scale(&forward, speed));
+        }
+        if self.input_state.right {
+            self.camera.position = vec3_add(&self.camera.position, &vec3_scale(&right, speed));
+        }
+        if self.input_state.left {
+            self.camera.position = vec3_sub(&self.camera.position, &vec3_scale(&right, speed));
+        }
+        if self.input_state.up {
+            self.camera.position = vec3_add(&self.camera.position, &vec3_scale(&up, speed));
+        }
+        if self.input_state.down {
+            self.camera.position = vec3_sub(&self.camera.position, &vec3_scale(&up, speed));
+        }
+    }
 
     pub fn render(
         &mut self,
@@ -519,6 +648,44 @@ impl Ren {
         self.window.request_redraw();
         self.frame_time = frame_time;
         self.pointer_pos = pointer_pos;
+
+        // Calculate Target Pos (Raycasting)
+        let width = self.size.0 as f32;
+        let height = self.size.1 as f32;
+        // Map pointer to NDC (-1 to 1)
+        let ndc_x = (pointer_pos[0] as f32 / width) * 2.0 - 1.0;
+        let ndc_y = 1.0 - (pointer_pos[1] as f32 / height) * 2.0; // Y Up
+
+        let fov = 90.0f32.to_radians();
+        let tan_half_fov = (fov * 0.5).tan();
+        let aspect = width / height;
+
+        let scale_y = tan_half_fov;
+        let scale_x = tan_half_fov * aspect;
+
+        // View Space Ray (Looking down -Z)
+        let dir_view = [ndc_x * scale_x, ndc_y * scale_y, -1.0];
+
+        let f = self.camera.get_forward();
+        let r = self.camera.get_right();
+        let cam_u = cross(&r, &f); // Camera Up
+
+        // Transform to World Space
+        // V_world = x*R + y*U + z*(-F)
+        let ray_dir = [
+            dir_view[0] * r[0] + dir_view[1] * cam_u[0] + dir_view[2] * -f[0],
+            dir_view[0] * r[1] + dir_view[1] * cam_u[1] + dir_view[2] * -f[1],
+            dir_view[0] * r[2] + dir_view[1] * cam_u[2] + dir_view[2] * -f[2],
+        ];
+        let ray_dir = vec3_normalize(ray_dir);
+
+        // Fixed distance from camera (allows 3D movement of attractor)
+        // This solves the issue of particles flattening on Z=0
+        let t = 200.0; 
+        
+        let p = vec3_add(&self.camera.position, &vec3_scale(&ray_dir, t));
+        let target_pos = [p[0], p[1], p[2], 0.0];
+
         self.queue.write_buffer(
             &self.dimensions_buffer,
             0,
@@ -528,10 +695,10 @@ impl Ren {
                 stride: self.padded_bytes_per_row / 4,
                 num_of_particles: self.num_of_particles,
                 frame_time: self.frame_time,
-                _pad: [0; 1],
+                _pad: [0; 3],
+                target_pos,
                 proj: self.projection,
-                view: look_at(&[0.0, 0.0, -200.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
-                pointer_pos: self.pointer_pos,
+                view: self.camera.get_view_matrix(),
             }]),
         );
 

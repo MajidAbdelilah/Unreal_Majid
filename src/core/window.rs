@@ -5,7 +5,7 @@ use std::time::Instant;
 use winit::event_loop::{self, EventLoop};
 use winit::{
     application::ApplicationHandler,
-    event::{KeyEvent, WindowEvent},
+    event::{DeviceEvent, ElementState, KeyEvent, MouseButton, WindowEvent},
     keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
@@ -20,6 +20,7 @@ pub struct Win {
     last_frame_time: Option<Instant>,
     frame_time: f32,
     pointer_pos: [u32; 2],
+    mouse_right_pressed: bool,
 }
 
 impl Win {
@@ -35,6 +36,7 @@ impl Win {
             last_frame_time: None,
             frame_time: 0.0,
             pointer_pos: [0, 0],
+            mouse_right_pressed: false,
         }
     }
 }
@@ -43,6 +45,7 @@ impl ApplicationHandler<Ren> for Win {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         #[allow(unused_mut)]
         let mut window_attributes = Window::default_attributes();
+        // .with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
 
         #[cfg(target_arch = "wasm32")]
         {
@@ -159,9 +162,48 @@ impl ApplicationHandler<Ren> for Win {
             } => {
                 self.pointer_pos[0] = position.x as u32;
                 self.pointer_pos[1] = position.y as u32;
-                println!("pointer pos: {:?}", self.pointer_pos);
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                if button == MouseButton::Left {
+                    self.mouse_right_pressed = state == ElementState::Pressed;
+                }
             }
             _ => {}
         }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &winit::event_loop::ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        if let Some(ren) = &mut self.ren {
+            if let DeviceEvent::MouseMotion { delta } = event {
+                if self.mouse_right_pressed {
+                    ren.handle_mouse_motion(delta.0, delta.1);
+                }
+            }
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        // if let Some(ren) = &self.ren {
+        //     let target_fps = 10000.0;
+        //     let frame_duration = std::time::Duration::from_secs_f32(1.0 / target_fps);
+
+        //     if let Some(last_frame) = self.last_frame_time {
+        //         let now = Instant::now();
+        //         if now.duration_since(last_frame) >= frame_duration {
+        //             ren.window.request_redraw();
+        //         } else {
+        //             event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+        //                 last_frame + frame_duration,
+        //             ));
+        //         }
+        //     } else {
+        //         ren.window.request_redraw();
+        //     }
+        // }
     }
 }
