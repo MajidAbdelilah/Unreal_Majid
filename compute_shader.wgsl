@@ -30,12 +30,12 @@ fn fast_reciprocal_fma(a: f32) -> f32 {
 
     // 2. First Iteration (Refines to ~14 bits)
     // Calculate residual: e = 1.0 - (a * x)
-    let e1 = fma(-a, x, 1.0);
+    let e1 = fma(- a, x, 1.0);
     // Apply correction: x = x + (x * e1)
     x = fma(x, e1, x);
 
     // 3. Second Iteration (Refines to full f32 precision)
-    let e2 = fma(-a, x, 1.0);
+    let e2 = fma(- a, x, 1.0);
     x = fma(x, e2, x);
 
     return x;
@@ -45,9 +45,9 @@ fn hash(value: u32) -> u32 {
     var state = value;
     state = state ^ 2747636419u;
     state = state * 2654435769u;
-    state = state ^ state >> 16u;
+    state = state ^ (state >> 16u);
     state = state * 2654435769u;
-    state = state ^ state >> 16u;
+    state = state ^ (state >> 16u);
     state = state * 2654435769u;
     return state;
 }
@@ -77,10 +77,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let target_pos = dimensions.target_pos.xyz;
     let diff = target_pos - p.pos.xyz;
     let dist_sq = dot(diff, diff);
-    
-    let r_inv = inverseSqrt(max(dist_sq, 0.001)); // Fast hardware instruction
+
+    let r_inv = inverseSqrt(max(dist_sq, 0.001));
+    // Fast hardware instruction
     let force_mag = 100000.0 * fast_reciprocal_fma(dist_sq + 100.0);
-    
+
     // Result direction is normalized implicitly here by multiplication
     p.accel = vec4<f32>(diff * (r_inv * force_mag), 0.0);
 
@@ -94,39 +95,8 @@ fn init(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    particles[global_id.x] = particle(
-        vec4<f32>(
-            fma(randomFloat(global_id.x), 50.0, -25.0),
-            fma(randomFloat(global_id.x * 2), 50.0, -25.0),
-            fma(randomFloat(global_id.x * 3), -50.0, 25.0),
-            1.0
-        ), // pos
+    particles[global_id.x] = particle(vec4<f32>(fma(randomFloat(global_id.x), 50.0, - 25.0), fma(randomFloat(global_id.x * 2), 50.0, - 25.0), fma(randomFloat(global_id.x * 3), - 50.0, 25.0), 1.0), // pos
     vec4<f32>(0.0, 0.0, 0.0, 0.0), /* speed */
 
     vec4<f32>(0.0, 0.0, 0.0, 0.0) /* accel */);
-}
-
-struct VertexOutput {
-    @builtin(position) clip_position: vec4<f32>,
-    @location(0) color: vec4<f32>,
-}
-
-@vertex
-fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
-    var out: VertexOutput;
-
-
-    let particle = particles[in_vertex_index];
-    out.clip_position = dimensions.proj_view * vec4<f32>(particle.pos.xyz, 1.0);
-    out.color = vec4<f32>(0.0, 0.0, 0.0, 1.0);
-
-    // Point size is not supported in WebGPU directly in the vertex shader (needs point-list topology)
-    // But we can just draw points.
-
-    return out;
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return in.color;
 }

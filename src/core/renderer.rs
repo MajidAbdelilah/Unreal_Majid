@@ -368,6 +368,8 @@ impl Ren {
         };
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("../../compute_shader.wgsl"));
+        let draw_shader =
+            device.create_shader_module(wgpu::include_wgsl!("../../draw_shader.wgsl"));
 
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Compute Pipeline"),
@@ -382,8 +384,8 @@ impl Ren {
             label: Some("rendering pipeline"),
             layout: None,
             vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: None,
+                module: &draw_shader,
+                entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[],
             },
@@ -399,8 +401,8 @@ impl Ren {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: None,
+                module: &draw_shader,
+                entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
@@ -419,23 +421,27 @@ impl Ren {
             mapped_at_creation: false,
         });
 
-        let args: Vec<String> = std::env::args().collect();
-        if args.len() != 2 {
-            println!(
-                "Error: please give me the number of particles as an argument of the program, as follow"
-            );
-            println!("./name_of_program 1000000");
-            exit(0);
-        }
-        let num_of_particles_res = args[1].parse::<u32>();
-        let mut _num_of_particles = 1;
-        match num_of_particles_res {
-            Ok(num) => {
-                _num_of_particles = num;
-            }
-            Err(e) => {
-                println!("Error: please enter a correct number");
+        let mut _num_of_particles = 1000000u32;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let args: Vec<String> = std::env::args().collect();
+            if args.len() != 2 {
+                println!(
+                    "Error: please give me the number of particles as an argument of the program, as follow"
+                );
+                println!("./name_of_program 1000000");
                 exit(0);
+            }
+            let num_of_particles_res = args[1].parse::<u32>();
+            match num_of_particles_res {
+                Ok(num) => {
+                    _num_of_particles = num;
+                }
+                Err(e) => {
+                    println!("Error: please enter a correct number");
+                    exit(0);
+                }
             }
         }
 
