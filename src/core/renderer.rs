@@ -18,6 +18,23 @@ struct Mat4f {
     data: [[f32; 4]; 4],
 }
 
+impl std::ops::Mul for Mat4f {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self {
+        let mut data = [[0.0; 4]; 4];
+        for c in 0..4 {
+            for r in 0..4 {
+                data[c][r] = self.data[0][r] * rhs.data[c][0]
+                    + self.data[1][r] * rhs.data[c][1]
+                    + self.data[2][r] * rhs.data[c][2]
+                    + self.data[3][r] * rhs.data[c][3];
+            }
+        }
+        Mat4f { data }
+    }
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Dimensions {
@@ -28,8 +45,7 @@ struct Dimensions {
     frame_time: f32,
     _pad: [u32; 3],
     target_pos: [f32; 4],
-    proj: Mat4f,
-    view: Mat4f,
+    proj_view: Mat4f,
 }
 
 #[derive(Default)]
@@ -52,7 +68,7 @@ impl Camera {
     pub fn new() -> Self {
         Self {
             position: [0.0, 0.0, -200.0],
-            yaw: -90.0f32.to_radians(), // Pointing along +Z? Old code: -200 to 0 -> +Z direction.
+            yaw: 90.0f32.to_radians(), // Pointing along +Z? Old code: -200 to 0 -> +Z direction.
             // If yaw=0 is +X, yaw=90 is +Z?
             // cos(-90)=0, sin(-90)=-1 (if Z=sin).
             // Let's stick to standard math.
@@ -451,8 +467,8 @@ impl Ren {
                 frame_time: 0.0,
                 _pad: [0; 3],
                 target_pos: [0.0; 4],
-                proj: projection,
-                view: look_at(&[0.0, 0.0, -200.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
+                proj_view: projection
+                    * look_at(&[0.0, 0.0, -200.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
             }]),
         );
 
@@ -571,8 +587,7 @@ impl Ren {
                     frame_time: self.frame_time,
                     _pad: [0; 3],
                     target_pos: [0.0; 4],
-                    proj: self.projection,
-                    view: self.camera.get_view_matrix(),
+                    proj_view: self.projection * self.camera.get_view_matrix(),
                 }]),
             );
         }
@@ -670,11 +685,7 @@ impl Ren {
         ];
         let ray_dir = vec3_normalize(ray_dir);
 
-        // Fixed distance from camera (allows 3D movement of attractor)
-        // This solves the issue of particles flattening on Z=0
-        let t = 200.0;
-
-        let p = vec3_add(&self.camera.position, &vec3_scale(&ray_dir, t));
+        let p = vec3_add(&self.camera.position, &vec3_scale(&ray_dir, 100.0));
         let target_pos = [p[0], p[1], p[2], 0.0];
 
         self.queue.write_buffer(
@@ -688,8 +699,7 @@ impl Ren {
                 frame_time: self.frame_time,
                 _pad: [0; 3],
                 target_pos,
-                proj: self.projection,
-                view: self.camera.get_view_matrix(),
+                proj_view: self.projection * self.camera.get_view_matrix(),
             }]),
         );
 
