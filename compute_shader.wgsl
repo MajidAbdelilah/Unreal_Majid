@@ -75,7 +75,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Frame-rate independent damping (approx 0.994 at 60 FPS)
     // Uses FMA: speed = speed * (-0.4 * dt) + speed  =>  speed * (1.0 - 0.4 * dt)
-    p.speed = fma(p.speed, -dt * 1.5, p.speed);
+    p.speed = fma(p.speed, -dt * 0.7, p.speed);
     
     
     
@@ -90,7 +90,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let r_inv = inverseSqrt(max(dist_sq, 0.001));
     // Fast hardware instruction
-    let force_mag = 100000.0 * fast_reciprocal_fma(dist_sq + 100.0);
+    let force_mag = 30000.0 * fast_reciprocal_fma(dist_sq + 100.0);
 
     // Result direction is normalized implicitly here by multiplication
     p.accel = vec4<f32>(diff * (r_inv * force_mag), 0.0);
@@ -123,7 +123,7 @@ fn init_sphere(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Cube root of random variable ensures uniform distribution in volume
     let random_radius_scale = pow(randomFloat(global_id.x * 3u), 1.0 / 3.0);
-    let r = 50.0 * random_radius_scale;
+    let r = 40.0 * random_radius_scale;
     
     let r_xy = r * sqrt(1.0 - u * u);
 

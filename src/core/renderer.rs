@@ -265,22 +265,27 @@ pub struct Ren {
     pub input_state: InputState,
     compute_shader: wgpu::ShaderModule,
     is_gravity_on: bool,
+    gravity_follow_mouse: bool,
+    target_pos: [f32; 4],
 }
 
 impl Ren {
-
-    pub fn run_init_sphere_compute_shader(&self){
-        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Compute Pipeline init sphere"),
-            layout: None,
-            module: &self.compute_shader,
-            entry_point: Some("init_sphere"),
-            compilation_options: Default::default(),
-            cache: Default::default(),
-        });
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("compute Encoder init sphere"),
-        });
+    pub fn run_init_sphere_compute_shader(&self) {
+        let pipeline = self
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Compute Pipeline init sphere"),
+                layout: None,
+                module: &self.compute_shader,
+                entry_point: Some("init_sphere"),
+                compilation_options: Default::default(),
+                cache: Default::default(),
+            });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("compute Encoder init sphere"),
+            });
 
         let bind_group_layout = pipeline.get_bind_group_layout(0);
         let bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -316,21 +321,24 @@ impl Ren {
             compute_pass.dispatch_workgroups(x_groups, 1, 1);
         }
         self.queue.submit(std::iter::once(encoder.finish()));
-
     }
 
-    fn run_init_cube_compute_shader(&self){
-         let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Compute Pipeline init sphere"),
-            layout: None,
-            module: &self.compute_shader,
-            entry_point: Some("init_cube"),
-            compilation_options: Default::default(),
-            cache: Default::default(),
-        });
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("compute Encoder init cube"),
-        });
+    fn run_init_cube_compute_shader(&self) {
+        let pipeline = self
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Compute Pipeline init sphere"),
+                layout: None,
+                module: &self.compute_shader,
+                entry_point: Some("init_cube"),
+                compilation_options: Default::default(),
+                cache: Default::default(),
+            });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("compute Encoder init cube"),
+            });
 
         let bind_group_layout = pipeline.get_bind_group_layout(0);
         let bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -366,7 +374,6 @@ impl Ren {
             compute_pass.dispatch_workgroups(x_groups, 1, 1);
         }
         self.queue.submit(std::iter::once(encoder.finish()));
-
     }
 
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
@@ -654,6 +661,8 @@ impl Ren {
             input_state: InputState::default(),
             compute_shader: shader,
             is_gravity_on: true,
+            gravity_follow_mouse: true,
+            target_pos: [0.0; 4],
         })
     }
 
@@ -735,6 +744,11 @@ impl Ren {
                     self.is_gravity_on = !self.is_gravity_on;
                 }
             }
+            KeyCode::KeyF => {
+                if is_pressed {
+                    self.gravity_follow_mouse = !self.gravity_follow_mouse;
+                }
+            }
             _ => {}
         }
     }
@@ -784,38 +798,40 @@ impl Ren {
         self.frame_time = frame_time;
         self.pointer_pos = pointer_pos;
 
-        // Calculate Target Pos (Raycasting)
-        let width = self.size.0 as f32;
-        let height = self.size.1 as f32;
-        // Map pointer to NDC (-1 to 1)
-        let ndc_x = (pointer_pos[0] as f32 / width) * 2.0 - 1.0;
-        let ndc_y = 1.0 - (pointer_pos[1] as f32 / height) * 2.0; // Y Up
+        if self.gravity_follow_mouse {
+            // Calculate Target Pos (Raycasting)
+            let width = self.size.0 as f32;
+            let height = self.size.1 as f32;
+            // Map pointer to NDC (-1 to 1)
+            let ndc_x = (pointer_pos[0] as f32 / width) * 2.0 - 1.0;
+            let ndc_y = 1.0 - (pointer_pos[1] as f32 / height) * 2.0; // Y Up
 
-        let fov = 90.0f32.to_radians();
-        let tan_half_fov = (fov * 0.5).tan();
-        let aspect = width / height;
+            let fov = 90.0f32.to_radians();
+            let tan_half_fov = (fov * 0.5).tan();
+            let aspect = width / height;
 
-        let scale_y = tan_half_fov;
-        let scale_x = tan_half_fov * aspect;
+            let scale_y = tan_half_fov;
+            let scale_x = tan_half_fov * aspect;
 
-        // View Space Ray (Looking down -Z)
-        let dir_view = [ndc_x * scale_x, ndc_y * scale_y, -1.0];
+            // View Space Ray (Looking down -Z)
+            let dir_view = [ndc_x * scale_x, ndc_y * scale_y, -1.0];
 
-        let f = self.camera.get_forward();
-        let r = self.camera.get_right();
-        let cam_u = cross(&r, &f); // Camera Up
+            let f = self.camera.get_forward();
+            let r = self.camera.get_right();
+            let cam_u = cross(&r, &f); // Camera Up
 
-        // Transform to World Space
-        // V_world = x*R + y*U + z*(-F)
-        let ray_dir = [
-            dir_view[0] * r[0] + dir_view[1] * cam_u[0] + dir_view[2] * -f[0],
-            dir_view[0] * r[1] + dir_view[1] * cam_u[1] + dir_view[2] * -f[1],
-            dir_view[0] * r[2] + dir_view[1] * cam_u[2] + dir_view[2] * -f[2],
-        ];
-        let ray_dir = vec3_normalize(ray_dir);
+            // Transform to World Space
+            // V_world = x*R + y*U + z*(-F)
+            let ray_dir = [
+                dir_view[0] * r[0] + dir_view[1] * cam_u[0] + dir_view[2] * -f[0],
+                dir_view[0] * r[1] + dir_view[1] * cam_u[1] + dir_view[2] * -f[1],
+                dir_view[0] * r[2] + dir_view[1] * cam_u[2] + dir_view[2] * -f[2],
+            ];
+            let ray_dir = vec3_normalize(ray_dir);
 
-        let p = vec3_add(&self.camera.position, &vec3_scale(&ray_dir, 100.0));
-        let target_pos = [p[0], p[1], p[2], 0.0];
+            let p = vec3_add(&self.camera.position, &vec3_scale(&ray_dir, 100.0));
+            self.target_pos = [p[0], p[1], p[2], 0.0];
+        }
 
         self.queue.write_buffer(
             &self.dimensions_buffer,
@@ -828,7 +844,7 @@ impl Ren {
                 frame_time: self.frame_time,
                 is_gravity_on: if self.is_gravity_on { 1 } else { 0 },
                 _pad: [0; 2],
-                target_pos,
+                target_pos: self.target_pos,
                 proj_view: self.projection * self.camera.get_view_matrix(),
             }]),
         );
@@ -878,7 +894,6 @@ impl Ren {
             compute_pass.dispatch_workgroups(x_groups, 1, 1);
         }
 
-     
         self.queue.submit(std::iter::once(encoder.finish()));
 
         // rendering
