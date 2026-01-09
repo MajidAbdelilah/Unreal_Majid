@@ -43,7 +43,8 @@ struct Dimensions {
     stride: u32,
     num_of_particles: u32,
     frame_time: f32,
-    _pad: [u32; 3],
+    is_gravity_on: u32,
+    _pad: [u32; 2],
     target_pos: [f32; 4],
     proj_view: Mat4f,
 }
@@ -262,9 +263,112 @@ pub struct Ren {
     projection: Mat4f,
     pub camera: Camera,
     pub input_state: InputState,
+    compute_shader: wgpu::ShaderModule,
+    is_gravity_on: bool,
 }
 
 impl Ren {
+
+    pub fn run_init_sphere_compute_shader(&self){
+        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Compute Pipeline init sphere"),
+            layout: None,
+            module: &self.compute_shader,
+            entry_point: Some("init_sphere"),
+            compilation_options: Default::default(),
+            cache: Default::default(),
+        });
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("compute Encoder init sphere"),
+        });
+
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        let bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Compute Bind Group init sphere"),
+            layout: &bind_group_layout,
+            entries: &[
+                // wgpu::BindGroupEntry {
+                //     binding: 0,
+                //     resource: particles.as_entire_binding(),
+                // },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.particles.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.dimensions_buffer.as_entire_binding(),
+                },
+            ],
+        }));
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Compute Pass init sphere"),
+                timestamp_writes: None,
+            });
+            compute_pass.set_pipeline(&pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+
+            let size = self.num_of_particles;
+            let x_groups = (size + 255) / 256;
+
+            compute_pass.dispatch_workgroups(x_groups, 1, 1);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+    }
+
+    fn run_init_cube_compute_shader(&self){
+         let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Compute Pipeline init sphere"),
+            layout: None,
+            module: &self.compute_shader,
+            entry_point: Some("init_cube"),
+            compilation_options: Default::default(),
+            cache: Default::default(),
+        });
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("compute Encoder init cube"),
+        });
+
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        let bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Compute Bind Group init cube"),
+            layout: &bind_group_layout,
+            entries: &[
+                // wgpu::BindGroupEntry {
+                //     binding: 0,
+                //     resource: particles.as_entire_binding(),
+                // },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.particles.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.dimensions_buffer.as_entire_binding(),
+                },
+            ],
+        }));
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Compute Pass init cube"),
+                timestamp_writes: None,
+            });
+            compute_pass.set_pipeline(&pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+
+            let size = self.num_of_particles;
+            let x_groups = (size + 255) / 256;
+
+            compute_pass.dispatch_workgroups(x_groups, 1, 1);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+    }
+
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
         let size = window.inner_size();
 
@@ -375,7 +479,7 @@ impl Ren {
             label: Some("Compute Pipeline"),
             layout: None,
             module: &shader,
-            entry_point: Some("init"),
+            entry_point: Some("init_sphere"),
             compilation_options: Default::default(),
             cache: Default::default(),
         });
@@ -471,7 +575,8 @@ impl Ren {
                 stride: 0,
                 num_of_particles: _num_of_particles,
                 frame_time: 0.0,
-                _pad: [0; 3],
+                is_gravity_on: 1,
+                _pad: [0; 2],
                 target_pos: [0.0; 4],
                 proj_view: projection
                     * look_at(&[0.0, 0.0, -200.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
@@ -547,6 +652,8 @@ impl Ren {
             projection,
             camera: Camera::new(),
             input_state: InputState::default(),
+            compute_shader: shader,
+            is_gravity_on: true,
         })
     }
 
@@ -591,7 +698,8 @@ impl Ren {
                     stride: padded_bytes_per_row / 4,
                     num_of_particles: self.num_of_particles,
                     frame_time: self.frame_time,
-                    _pad: [0; 3],
+                    is_gravity_on: if self.is_gravity_on { 1 } else { 0 },
+                    _pad: [0; 2],
                     target_pos: [0.0; 4],
                     proj_view: self.projection * self.camera.get_view_matrix(),
                 }]),
@@ -610,6 +718,21 @@ impl Ren {
             KeyCode::Escape => {
                 if is_pressed {
                     event_loop.exit()
+                }
+            }
+            KeyCode::KeyR => {
+                if is_pressed {
+                    self.run_init_sphere_compute_shader();
+                }
+            }
+            KeyCode::KeyT => {
+                if is_pressed {
+                    self.run_init_cube_compute_shader();
+                }
+            }
+            KeyCode::KeyG => {
+                if is_pressed {
+                    self.is_gravity_on = !self.is_gravity_on;
                 }
             }
             _ => {}
@@ -703,7 +826,8 @@ impl Ren {
                 stride: self.padded_bytes_per_row / 4,
                 num_of_particles: self.num_of_particles,
                 frame_time: self.frame_time,
-                _pad: [0; 3],
+                is_gravity_on: if self.is_gravity_on { 1 } else { 0 },
+                _pad: [0; 2],
                 target_pos,
                 proj_view: self.projection * self.camera.get_view_matrix(),
             }]),
@@ -754,33 +878,7 @@ impl Ren {
             compute_pass.dispatch_workgroups(x_groups, 1, 1);
         }
 
-        // let unpadded_bytes_per_row = self.config.width * 4;
-        // let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        // let padded_bytes_per_row_padding = (align - unpadded_bytes_per_row % align) % align;
-        // let padded_bytes_per_row = unpadded_bytes_per_row + padded_bytes_per_row_padding;
-
-        // encoder.copy_buffer_to_texture(
-        //     wgpu::TexelCopyBufferInfo {
-        //         buffer: self.output_buffer.as_ref().unwrap(),
-        //         layout: wgpu::TexelCopyBufferLayout {
-        //             offset: 0,
-        //             bytes_per_row: Some(padded_bytes_per_row),
-        //             rows_per_image: Some(self.config.height),
-        //         },
-        //     },
-        //     wgpu::TexelCopyTextureInfo {
-        //         texture: &output.texture,
-        //         mip_level: 0,
-        //         origin: wgpu::Origin3d::ZERO,
-        //         aspect: wgpu::TextureAspect::All,
-        //     },
-        //     wgpu::Extent3d {
-        //         width: self.config.width,
-        //         height: self.config.height,
-        //         depth_or_array_layers: 1,
-        //     },
-        // );
-
+     
         self.queue.submit(std::iter::once(encoder.finish()));
 
         // rendering
