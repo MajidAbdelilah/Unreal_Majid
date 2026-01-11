@@ -40,13 +40,20 @@ impl std::ops::Mul for Mat4f {
 struct Dimensions {
     width: u32,
     height: u32,
-    stride: u32,
+    generation_offset: u32,
     num_of_particles: u32,
     frame_time: f32,
     is_gravity_on: u32,
-    _pad: [u32; 2],
+    time_to_die: f32,
+    num_of_particles_to_generate_per_second: u32,
     target_pos: [f32; 4],
     proj_view: Mat4f,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct NumOfAliveParticles {
+    count: u32,
 }
 
 #[derive(Default)]
@@ -125,6 +132,8 @@ struct Particle {
     pos: [f32; 4],
     speed: [f32; 4],
     accel: [f32; 4],
+    time_alive: f32,
+    dead: u32,
 }
 
 fn dot(a: &[f32; 3], b: &[f32; 3]) -> f32 {
@@ -267,6 +276,13 @@ pub struct Ren {
     is_gravity_on: bool,
     gravity_follow_mouse: bool,
     target_pos: [f32; 4],
+    is_particles_generated: bool,
+    time_to_die: f32,
+    num_of_particles_to_generate_per_second: u32,
+    generation_offset: u32,
+    num_of_alive_particles: NumOfAliveParticles,
+    num_of_alive_particles_buffer: wgpu::Buffer,
+    num_of_alive_particles_staging_buffer: wgpu::Buffer,
 }
 
 impl Ren {
@@ -531,17 +547,39 @@ impl Ren {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        // used to read how many alive particles from the gpu
+        let num_of_alive_particles_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("num_of_alive_particles_buffer"),
+            size: std::mem::size_of::<NumOfAliveParticles>() as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let num_of_alive_particles_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("num_of_alive_particles_staging_buffer"),
+            size: std::mem::size_of::<NumOfAliveParticles>() as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
 
         let mut _num_of_particles = 1000000u32;
+        let mut _time_to_die = 0.0;
+        let mut _number_of_particles_to_generate_per_second = 0u32;
 
         #[cfg(not(target_arch = "wasm32"))]
         {
             let args: Vec<String> = std::env::args().collect();
-            if args.len() != 2 {
+            if args.len() != 2 && args.len() != 4 {
                 println!(
                     "Error: please give me the number of particles as an argument of the program, as follow"
                 );
-                println!("./name_of_program 1000000");
+                println!("./name_of_program 1000000 (number of particles)");
+                println!("or: ");
+                println!(
+                    "./name_of_program 1000000 1.0 1000 (for 1 second time to die and 1000 particles generated per second)"
+                );
                 exit(0);
             }
             let num_of_particles_res = args[1].parse::<u32>();
@@ -552,6 +590,48 @@ impl Ren {
                 Err(e) => {
                     println!("Error: please enter a correct number");
                     exit(0);
+                }
+            }
+            if args.len() == 4 {
+                let time_to_die_res = args[2].parse::<f32>();
+                let number_of_particles_to_generate_per_second_res = args[3].parse::<u32>();
+                match time_to_die_res {
+                    Ok(t) => {
+                        if t <= 0.0 {
+                            println!("Error: time to die cannot be negative");
+                            exit(0);
+                        }
+                        _time_to_die = t;
+                        println!("Time to die set to: {}", t);
+                    }
+                    Err(e) => {
+                        println!("Error: please enter a correct time to die number");
+                        exit(0);
+                    }
+                }
+                match number_of_particles_to_generate_per_second_res {
+                    Ok(n) => {
+                        if n == 0 {
+                            println!(
+                                "Error: number of particles to generate per second cannot be zero"
+                            );
+                            exit(0);
+                        }
+                        if n > _num_of_particles {
+                            println!(
+                                "Error: number of particles to generate per second cannot be greater than total number of particles"
+                            );
+                            exit(0);
+                        }
+                        _number_of_particles_to_generate_per_second = n;
+                        println!("Number of particles to generate per second set to: {}", n);
+                    }
+                    Err(e) => {
+                        println!(
+                            "Error: please enter a correct number of particles to generate per second"
+                        );
+                        exit(0);
+                    }
                 }
             }
         }
@@ -579,11 +659,12 @@ impl Ren {
             bytemuck::cast_slice(&[Dimensions {
                 width: size.width,
                 height: size.height,
-                stride: 0,
+                generation_offset: 0,
                 num_of_particles: _num_of_particles,
                 frame_time: 0.0,
                 is_gravity_on: 1,
-                _pad: [0; 2],
+                time_to_die: _time_to_die,
+                num_of_particles_to_generate_per_second: 1000,
                 target_pos: [0.0; 4],
                 proj_view: projection
                     * look_at(&[0.0, 0.0, -200.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
@@ -663,6 +744,13 @@ impl Ren {
             is_gravity_on: true,
             gravity_follow_mouse: true,
             target_pos: [0.0; 4],
+            is_particles_generated: _time_to_die > 0.0,
+            time_to_die: _time_to_die,
+            num_of_particles_to_generate_per_second: _number_of_particles_to_generate_per_second,
+            generation_offset: 0,
+            num_of_alive_particles: NumOfAliveParticles { count: 0 },
+            num_of_alive_particles_buffer,
+            num_of_alive_particles_staging_buffer,
         })
     }
 
@@ -704,11 +792,13 @@ impl Ren {
                 bytemuck::cast_slice(&[Dimensions {
                     width,
                     height,
-                    stride: padded_bytes_per_row / 4,
+                    generation_offset: self.generation_offset,
                     num_of_particles: self.num_of_particles,
                     frame_time: self.frame_time,
                     is_gravity_on: if self.is_gravity_on { 1 } else { 0 },
-                    _pad: [0; 2],
+                    time_to_die: self.time_to_die,
+                    num_of_particles_to_generate_per_second: self
+                        .num_of_particles_to_generate_per_second,
                     target_pos: [0.0; 4],
                     proj_view: self.projection * self.camera.get_view_matrix(),
                 }]),
@@ -839,11 +929,13 @@ impl Ren {
             bytemuck::cast_slice(&[Dimensions {
                 width: self.size.0,
                 height: self.size.1,
-                stride: self.padded_bytes_per_row / 4,
+                generation_offset: self.generation_offset,
                 num_of_particles: self.num_of_particles,
                 frame_time: self.frame_time,
                 is_gravity_on: if self.is_gravity_on { 1 } else { 0 },
-                _pad: [0; 2],
+                time_to_die: self.time_to_die,
+                num_of_particles_to_generate_per_second: self
+                    .num_of_particles_to_generate_per_second,
                 target_pos: self.target_pos,
                 proj_view: self.projection * self.camera.get_view_matrix(),
             }]),
@@ -877,6 +969,10 @@ impl Ren {
                     binding: 2,
                     resource: self.dimensions_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.num_of_alive_particles_buffer.as_entire_binding(),
+                },
             ],
         }));
 
@@ -894,8 +990,40 @@ impl Ren {
             compute_pass.dispatch_workgroups(x_groups, 1, 1);
         }
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        encoder.copy_buffer_to_buffer(
+            &self.num_of_alive_particles_buffer,
+            0,
+            &self.num_of_alive_particles_staging_buffer,
+            0,
+            std::mem::size_of::<NumOfAliveParticles>() as u64,
+        );
 
+        self.queue.submit(std::iter::once(encoder.finish()));
+        // read back num of alive particles
+        {
+            let buffer_slice = self.num_of_alive_particles_staging_buffer.slice(..);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
+            self.device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+
+            if let Ok(Ok(())) = receiver.recv() {
+                let data = buffer_slice.get_mapped_range();
+                let result: NumOfAliveParticles = *bytemuck::from_bytes(&data);
+                self.num_of_alive_particles = result;
+                drop(data);
+                self.num_of_alive_particles_staging_buffer.unmap();
+            }
+        }
+
+        self.generation_offset += 1;
+
+        if (self.generation_offset * self.num_of_particles_to_generate_per_second)
+            >= self.num_of_particles
+        {
+            self.generation_offset = 0;
+        }
         // rendering
         // let output = self.surface.get_current_texture().unwrap();
         let view = output
