@@ -9,6 +9,7 @@ struct Dimensions {
     num_of_particles_to_generate_per_second: u32,
     target_pos: vec4<f32>,
     proj_view: mat4x4<f32>,
+    init_type: u32,
 }
 
 struct particle {
@@ -18,8 +19,10 @@ struct particle {
 }
 
 struct number_of_alive_particles {
-    count: u32,
+    count: atomic<u32>,
 }
+
+var<workgroup> shared_reduce: array<u32, 256>;
 
 @group(0) @binding(1)
 var<storage, read_write> particles: array<particle>;
@@ -70,63 +73,78 @@ fn inverseSqrt(value: f32) -> f32 {
     return fast_reciprocal_fma(sqrt(value));
 }
 
-fn calculate_num_of_alive_particles(id_x: u32) {
-    let total_num_of_particles: u32 = dimensions.num_of_particles;
-    var modulo: u32 = 2;
-    // var p = particles[id_x];
-    // var res: u32 = 0;
-    while (modulo < (total_num_of_particles + 1))
-    {
-        if((id_x % modulo) == 0u && (id_x + (modulo / 2u)) < total_num_of_particles)
-        {
-            if(modulo == 2)
-            {
-                particles[id_x].pos.w = particles[id_x].accel.w + particles[id_x + 1u].accel.w;
-            } else {
-                particles[id_x].pos.w = particles[id_x].pos.w + particles[id_x + modulo / 2u].pos.w;
-            }
-        } else {
-            return ;
-        }
-        modulo = modulo * 2u;
-    }
-    return ;
+const PI: f32 = 3.14159265359;
+const TWO_PI: f32 = 6.28318530718;
+const ONE_DIV_3: f32 = 1.0 / 3.0;
+
+fn get_cube_pos(id: u32) -> vec4<f32> {
+     return vec4<f32>(fma(randomFloat(id), 50.0, - 25.0), fma(randomFloat(id * 2u), 50.0, - 25.0), fma(randomFloat(id * 3u), - 50.0, 25.0), 0.0);
+}
+
+fn get_sphere_pos(id: u32) -> vec4<f32> {
+    // Spherical coordinates method for uniform distribution
+    let u = randomFloat(id) * 2.0 - 1.0;
+    let theta = randomFloat(id * 2u) * TWO_PI; // 2*PI
+
+    // Cube root of random variable ensures uniform distribution in volume
+    let random_radius_scale = pow(randomFloat(id * 3u), ONE_DIV_3);
+    let r = 40.0 * random_radius_scale;
+
+    let r_xy = r * sqrt(1.0 - u * u);
+
+    return vec4<f32>(
+        r_xy * cos(theta),
+        r_xy * sin(theta),
+        r * u,
+        0.0);
 }
 
 @compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    if (global_id.x >= dimensions.num_of_particles) {
-        return;
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>) {
+
+    // Parallel Reduction: Step 1 - Load into shared memory
+    var local_val = 0u;
+    if (global_id.x < dimensions.num_of_particles) {
+        particles[global_id.x].pos.w = 0.0;
+        local_val = select(0u, 1u, particles[global_id.x].accel.w >= 1.0);
+    }
+    shared_reduce[local_id.x] = local_val;
+    workgroupBarrier();
+
+    // Parallel Reduction: Step 2 - Reduce in shared memory
+    // Workgroup size is 256, so we start stride at 128
+    for (var s = 128u; s > 0u; s >>= 1u) {
+        if (local_id.x < s) {
+            shared_reduce[local_id.x] += shared_reduce[local_id.x + s];
+        }
+        workgroupBarrier();
     }
 
-    // Optimization 1: Memory Coalescing (Load once into registers)
+    // Parallel Reduction: Step 3 - Add partial sum to global counter
+    if (local_id.x == 0u) {
+        atomicAdd(&alive_particles.count, shared_reduce[0]);
+    }
+
+
     var p = particles[global_id.x];
-    if(p.accel.w <= 0.0f)
-    {
-        if(global_id.x >= (dimensions.generation_offset * dimensions.num_of_particles_to_generate_per_second)
-        && global_id.x < (dimensions.generation_offset * dimensions.num_of_particles_to_generate_per_second + dimensions.generation_offset))
-        {
-            p.accel.w = 1.0;
-            p.speed.w = 0.0;
-            particles[global_id.x] = p;
+
+    let start_gen = dimensions.generation_offset * dimensions.num_of_particles_to_generate_per_second;
+    let end_gen = start_gen + dimensions.num_of_particles_to_generate_per_second;
+    let should_revive = (p.accel.w <= 0.0) && (global_id.x >= start_gen) && (global_id.x < end_gen);
+
+    if (should_revive) {
+        p.accel.w = 1.0;
+        p.speed.w = 0.0;
+        if (dimensions.init_type == 0u) {
+             p.pos = get_cube_pos(global_id.x);
         } else {
-            return;
+             p.pos = get_sphere_pos(global_id.x);
         }
     }
     let dt = vec3<f32>(dimensions.frame_time);
     p.speed.w = p.speed.w + dt.x;
-    if(p.speed.w > dimensions.time_to_die)
-    {
-        p.accel.w = 0.0;
-        particles[global_id.x] = p;
-        return;
-    }
+    p.accel.w = select(p.accel.w, 0.0, (p.speed.w >= dimensions.time_to_die) && (dimensions.time_to_die > 0.0));
 
-    calculate_num_of_alive_particles(global_id.x);
-    if(global_id.x == 0u)
-    {
-        alive_particles.count = u32(particles[0].pos.w);
-    }
 
     // Optimization 2: Fused Multiply-Add (FMA) for Physics
     // Executes a * b + c in a single instruction cycle
@@ -164,48 +182,25 @@ fn init_cube(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (global_id.x >= dimensions.num_of_particles) {
         return;
     }
-    var dead_or_alive  = f32(!(dimensions.time_to_die <= 0.0)) * 0.0 + f32((dimensions.time_to_die <= 0.0)) * 1.0;
-    if(particles[global_id.x].accel.w >= 1.0)
-    {
-        dead_or_alive = 1.0;
-    }
+    var dead_or_alive = select(0.0, 1.0, dimensions.time_to_die <= 0.0);
+    dead_or_alive = select(dead_or_alive, 1.0, particles[global_id.x].accel.w >= 1.0);
 
-    particles[global_id.x] = particle(vec4<f32>(fma(randomFloat(global_id.x), 50.0, - 25.0), fma(randomFloat(global_id.x * 2), 50.0, - 25.0), fma(randomFloat(global_id.x * 3), - 50.0, 25.0), 0.0), // pos
-    vec4<f32>(0.0, 0.0, 0.0, particles[global_id.x].speed.w), /* speed w is time spent alive to date */
-
-    vec4<f32>(0.0, 0.0, 0.0,  dead_or_alive), /* accel 0.0 if dead, 1.0 if alive */);
+    particles[global_id.x] = particle(
+        get_cube_pos(global_id.x), // pos
+        vec4<f32>(0.0, 0.0, 0.0, particles[global_id.x].speed.w), /* speed w is time spent alive to date */
+        vec4<f32>(0.0, 0.0, 0.0,  dead_or_alive), /* accel 0.0 if dead, 1.0 if alive */);
 }
 
-const PI: f32 = 3.14159265359;
-const TWO_PI: f32 = 6.28318530718;
-const ONE_DIV_3: f32 = 1.0 / 3.0;
 @compute @workgroup_size(256)
 fn init_sphere(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (global_id.x >= dimensions.num_of_particles) {
         return;
     }
 
-    // Spherical coordinates method for uniform distribution
-    let u = randomFloat(global_id.x) * 2.0 - 1.0;
-    let theta = randomFloat(global_id.x * 2u) * TWO_PI; // 2*PI
-
-    // Cube root of random variable ensures uniform distribution in volume
-    let random_radius_scale = pow(randomFloat(global_id.x * 3u), ONE_DIV_3);
-    let r = 40.0 * random_radius_scale;
-
-    let r_xy = r * sqrt(1.0 - u * u);
-
-    var dead_or_alive  = f32(!(dimensions.time_to_die <= 0.0)) * 0.0 + f32((dimensions.time_to_die <= 0.0)) * 1.0;
-    if(particles[global_id.x].accel.w == 1.0)
-    {
-        dead_or_alive = 1.0;
-    }
-    particles[global_id.x] = particle(vec4<f32>(
-        r_xy * cos(theta),
-        r_xy * sin(theta),
-        r * u,
-        0.0), // pos
-    vec4<f32>(0.0, 0.0, 0.0, particles[global_id.x].speed.w), /* speed */
-
-    vec4<f32>(0.0, 0.0, 0.0, dead_or_alive ), /* accel */);
+    var dead_or_alive = select(0.0, 1.0, dimensions.time_to_die <= 0.0);
+    dead_or_alive = select(dead_or_alive, 1.0, particles[global_id.x].accel.w >= 1.0);
+    particles[global_id.x] = particle(
+        get_sphere_pos(global_id.x), // pos
+        vec4<f32>(0.0, 0.0, 0.0, particles[global_id.x].speed.w), /* speed */
+        vec4<f32>(0.0, 0.0, 0.0, dead_or_alive ), /* accel */);
 }

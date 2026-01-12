@@ -130,7 +130,10 @@ impl ApplicationHandler<Ren> for Win {
                     let elapsed = now.duration_since(last);
                     if elapsed.as_secs_f32() >= 1.0 {
                         let fps = self.frame_count as f32 / elapsed.as_secs_f32();
-                        let title = format!("Unreal Majid - FPS: {:.2}", fps);
+                        let title = format!(
+                            "Unreal Majid - FPS: {:.2}, number of particles: {}",
+                            fps, ren.num_of_alive_particles.count
+                        );
                         ren.window.set_title(&title);
 
                         self.frame_count = 0;

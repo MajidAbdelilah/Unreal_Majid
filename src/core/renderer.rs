@@ -48,12 +48,14 @@ struct Dimensions {
     num_of_particles_to_generate_per_second: u32,
     target_pos: [f32; 4],
     proj_view: Mat4f,
+    init_type: u32,
+    _pad: [u32; 3],
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct NumOfAliveParticles {
-    count: u32,
+pub struct NumOfAliveParticles {
+    pub count: u32,
 }
 
 #[derive(Default)]
@@ -280,9 +282,10 @@ pub struct Ren {
     time_to_die: f32,
     num_of_particles_to_generate_per_second: u32,
     generation_offset: u32,
-    num_of_alive_particles: NumOfAliveParticles,
+    pub num_of_alive_particles: NumOfAliveParticles,
     num_of_alive_particles_buffer: wgpu::Buffer,
     num_of_alive_particles_staging_buffer: wgpu::Buffer,
+    init_type: u32,
 }
 
 impl Ren {
@@ -617,12 +620,12 @@ impl Ren {
                             );
                             exit(0);
                         }
-                        if n > _num_of_particles {
-                            println!(
-                                "Error: number of particles to generate per second cannot be greater than total number of particles"
-                            );
-                            exit(0);
-                        }
+                        // if n > _num_of_particles {
+                        //     println!(
+                        //         "Error: number of particles to generate per second cannot be greater than total number of particles"
+                        //     );
+                        //     exit(0);
+                        // }
                         _number_of_particles_to_generate_per_second = n;
                         println!("Number of particles to generate per second set to: {}", n);
                     }
@@ -668,6 +671,8 @@ impl Ren {
                 target_pos: [0.0; 4],
                 proj_view: projection
                     * look_at(&[0.0, 0.0, -200.0], &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
+                init_type: 0,
+                _pad: [0; 3],
             }]),
         );
 
@@ -751,6 +756,7 @@ impl Ren {
             num_of_alive_particles: NumOfAliveParticles { count: 0 },
             num_of_alive_particles_buffer,
             num_of_alive_particles_staging_buffer,
+            init_type: 0,
         })
     }
 
@@ -801,6 +807,8 @@ impl Ren {
                         .num_of_particles_to_generate_per_second,
                     target_pos: [0.0; 4],
                     proj_view: self.projection * self.camera.get_view_matrix(),
+                    init_type: self.init_type,
+                    _pad: [0; 3],
                 }]),
             );
         }
@@ -934,11 +942,22 @@ impl Ren {
                 frame_time: self.frame_time,
                 is_gravity_on: if self.is_gravity_on { 1 } else { 0 },
                 time_to_die: self.time_to_die,
-                num_of_particles_to_generate_per_second: self
-                    .num_of_particles_to_generate_per_second,
+                num_of_particles_to_generate_per_second: ((self
+                    .num_of_particles_to_generate_per_second
+                    as f32)
+                    * self.frame_time)
+                    as u32,
                 target_pos: self.target_pos,
                 proj_view: self.projection * self.camera.get_view_matrix(),
+                init_type: self.init_type,
+                _pad: [0; 3],
             }]),
+        );
+
+        self.queue.write_buffer(
+            &self.num_of_alive_particles_buffer,
+            0,
+            bytemuck::cast_slice(&[NumOfAliveParticles { count: 0 }]),
         );
 
         if !self.is_surface_configured || self.output_buffer.is_none() {
@@ -1019,7 +1038,8 @@ impl Ren {
 
         self.generation_offset += 1;
 
-        if (self.generation_offset * self.num_of_particles_to_generate_per_second)
+        if (self.generation_offset
+            * ((self.num_of_particles_to_generate_per_second as f32) * self.frame_time) as u32)
             >= self.num_of_particles
         {
             self.generation_offset = 0;
