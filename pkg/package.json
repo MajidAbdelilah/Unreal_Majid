@@ -1,0 +1,15 @@
+{
+  "name": "Unreal_Majid",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "Unreal_Majid_bg.wasm",
+    "Unreal_Majid.js",
+    "Unreal_Majid.d.ts"
+  ],
+  "main": "Unreal_Majid.js",
+  "types": "Unreal_Majid.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
