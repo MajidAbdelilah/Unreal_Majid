@@ -1019,6 +1019,7 @@ impl Ren {
 
         self.queue.submit(std::iter::once(encoder.finish()));
         // read back num of alive particles
+        #[cfg(not(target_arch = "wasm32"))]
         {
             let buffer_slice = self.num_of_alive_particles_staging_buffer.slice(..);
             let (sender, receiver) = std::sync::mpsc::channel();
