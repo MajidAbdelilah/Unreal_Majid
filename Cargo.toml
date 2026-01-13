@@ -1,5 +1,5 @@
 [package]
-name = "Unreal_Majid"
+name = "particle-system"
 version = "0.1.0"
 edition = "2024"
 
@@ -38,5 +38,5 @@ web-sys = { version = "0.3", features = [
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "Unreal_Majid"
+name = "particle-system"
 path = "src/main.rs"
