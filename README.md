@@ -2,6 +2,12 @@
 
 A high-performance GPU particle simulation written in Rust using [wgpu](https://wgpu.rs/). This project demonstrates the power of Compute Shaders to handle physics calculations for millions of particles in real-time, rendering them efficiently on both native desktop platforms and the web via WebAssembly.
 
+## Live Demo
+
+[Run in Browser](https://majidabdelilah.github.io/Unreal_Majid/)
+
+**Note**: You need a desktop and a browser that support **WebGPU**. Mobile devices are not supported.
+
 ## Features
 
 - **GPU Compute Shaders**: Physics calculations (position, velocity, acceleration) are offloaded to the GPU for massive parallelism.
